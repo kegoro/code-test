@@ -77,7 +77,7 @@ describe('processTick — single bar accumulation', () => {
     ]);
     const bar = getCurrentBar(s1)!;
     expect(bar.levels).toHaveLength(1);
-    const lvl = bar.levels[0];
+    const lvl = bar.levels[0]!;
     expect(lvl.price).toBe(21000);
     expect(lvl.bidVol).toBe(8);
     expect(lvl.askVol).toBe(7);
@@ -89,7 +89,7 @@ describe('processTick — single bar accumulation', () => {
       tick({ offsetMs: 100, price: 21000, volume: 3, tick_type: TICK_TYPE_ASK }),
     ]);
     const bar = getCurrentBar(s)!;
-    expect(bar.levels[0].delta).toBe(-7);
+    expect(bar.levels[0]!.delta).toBe(-7);
   });
 
   it('totalDelta sums deltas across levels', () => {
@@ -140,8 +140,8 @@ describe('processTick — bar boundary rotation', () => {
 
     const completed = getCompletedBars(s);
     expect(completed).toHaveLength(1);
-    expect(completed[0].closed).toBe(true);
-    expect(completed[0].totalVolume).toBe(3);
+    expect(completed[0]!.closed).toBe(true);
+    expect(completed[0]!.totalVolume).toBe(3);
 
     const cur = getCurrentBar(s)!;
     expect(cur.closed).toBe(false);
@@ -208,14 +208,14 @@ describe('Imbalance flag', () => {
       tick({ offsetMs: 0, price: 21000, volume: 80, tick_type: TICK_TYPE_ASK }),
       tick({ offsetMs: 100, price: 21000, volume: 20, tick_type: TICK_TYPE_BID }),
     ]);
-    expect(getCurrentBar(s)!.levels[0].imbalance).toBe(false);
+    expect(getCurrentBar(s)!.levels[0]!.imbalance).toBe(false);
 
     const s2 = feed(createInitialState(60), [
       // 90 ask vs 5 bid → 85/95 ≈ 0.89 → true
       tick({ offsetMs: 0, price: 21000, volume: 90, tick_type: TICK_TYPE_ASK }),
       tick({ offsetMs: 100, price: 21000, volume: 5, tick_type: TICK_TYPE_BID }),
     ]);
-    expect(getCurrentBar(s2)!.levels[0].imbalance).toBe(true);
+    expect(getCurrentBar(s2)!.levels[0]!.imbalance).toBe(true);
   });
 
   it('imbalance is false for balanced levels', () => {
@@ -223,7 +223,7 @@ describe('Imbalance flag', () => {
       tick({ offsetMs: 0, price: 21000, volume: 50, tick_type: TICK_TYPE_ASK }),
       tick({ offsetMs: 100, price: 21000, volume: 50, tick_type: TICK_TYPE_BID }),
     ]);
-    expect(getCurrentBar(s)!.levels[0].imbalance).toBe(false);
+    expect(getCurrentBar(s)!.levels[0]!.imbalance).toBe(false);
   });
 
   it('imbalance is false when level has zero total volume', () => {
