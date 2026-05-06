@@ -8,3 +8,15 @@ out
 .DS_Store
 .vercel
 next-env.d.ts
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
+# Misc
+新增資料夾/

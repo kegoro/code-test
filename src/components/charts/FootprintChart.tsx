@@ -57,6 +57,7 @@ export function FootprintChart({
   const { bars, currentBar, isConnected, error } = useFootprintSocket(
     wsUrl,
     barSeconds,
+    symbol,
   );
 
   // chart 初始化

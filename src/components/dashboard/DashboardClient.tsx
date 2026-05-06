@@ -24,6 +24,9 @@ import { Toast, type ToastTone } from "@/components/ui/Toast";
 import { saveTradeLog, makeId, type TradeLog } from "@/data/journal-db";
 import { useCallback, useRef } from "react";
 import { useLiveTicks } from "@/hooks/useLiveTicks";
+import { FootprintChart } from "@/components/charts/FootprintChart";
+
+type ChartView = "kline" | "footprint";
 
 const initialScore: ScoreCardData = evaluateScoring({
   scoreA: 0,
@@ -44,6 +47,7 @@ export function DashboardClient() {
   const [scoring, setScoring] = useState<ScoreCardData>(initialScore);
   const [selectedSymbol, setSelectedSymbol] = useState<string>(DEFAULT_SYMBOL);
   const [tradeState, setTradeState] = useState<TradeState>(TradeState.S0_Idle);
+  const [chartView, setChartView] = useState<ChartView>("kline");
   const [toast, setToast] = useState<ToastState | null>(null);
   const lastSnapshotKey = useRef<string | null>(null);
 
@@ -165,17 +169,44 @@ export function DashboardClient() {
       />
 
       <div className="flex flex-col gap-2 min-h-0">
-        <div className="flex items-center justify-end gap-2 px-1">
-          <AIStatus status={ai.status} newsCount={ai.data?.newsCount ?? null} model={ai.data?.model ?? null} errorMessage={ai.errorMessage} />
-          <TelegramStatus event={event} />
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex items-center gap-1 rounded-md border border-white/10 bg-white/5 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setChartView("kline")}
+              className={`px-2.5 py-1 rounded ${chartView === "kline" ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
+            >
+              K線
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartView("footprint")}
+              className={`px-2.5 py-1 rounded ${chartView === "footprint" ? "bg-white/15 text-white" : "text-white/60 hover:text-white"}`}
+            >
+              Footprint
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <AIStatus status={ai.status} newsCount={ai.data?.newsCount ?? null} model={ai.data?.model ?? null} errorMessage={ai.errorMessage} />
+            <TelegramStatus event={event} />
+          </div>
         </div>
         <div className="flex-1 min-h-0">
-          <ChartCard
-            symbol={selectedSymbol}
-            state={kline.state}
-            candles={kline.candles}
-            refetch={kline.refetch}
-          />
+          {chartView === "kline" ? (
+            <ChartCard
+              symbol={selectedSymbol}
+              state={kline.state}
+              candles={kline.candles}
+              refetch={kline.refetch}
+            />
+          ) : (
+            <FootprintChart
+              symbol={selectedSymbol}
+              wsUrl="ws://localhost:8000/ws/footprint"
+              barSeconds={60}
+              className="h-full w-full"
+            />
+          )}
         </div>
         <StateFlow current={tradeState} onChange={onTradeStateChange} scoring={scoring} />
       </div>

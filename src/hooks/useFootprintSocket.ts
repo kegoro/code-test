@@ -63,6 +63,7 @@ const BACKOFF_MAX_MS = 30_000;
 export function useFootprintSocket(
   url: string = 'ws://localhost:8000/ws/footprint',
   barSeconds: number = 60,
+  symbol?: string,
 ): UseFootprintSocketReturn {
   const [bars, setBars] = useState<FootprintBar[]>([]);
   const [currentBar, setCurrentBar] = useState<FootprintBar | null>(null);
@@ -76,6 +77,9 @@ export function useFootprintSocket(
 
   useEffect(() => {
     cancelledRef.current = false;
+    // symbol 變動會觸發 effect 重跑；先重置 UI 狀態避免顯示舊資料
+    setBars([]);
+    setCurrentBar(null);
 
     const loadHistory = async () => {
       try {
@@ -185,18 +189,26 @@ export function useFootprintSocket(
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      if (wsRef.current !== null) {
+      const ws = wsRef.current;
+      if (ws !== null) {
+        // 先拔掉 handlers，避免舊 socket 的 onclose 在新 effect 跑起來後
+        // 用 stale closure 觸發 setState / scheduleReconnect
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
         try {
-          wsRef.current.close();
+          ws.close();
         } catch {
           // ignore
         }
         wsRef.current = null;
       }
+      attemptRef.current = 0;
     };
-    // barSeconds 留作未來 client-side 模式參數，目前不影響副作用
+    // barSeconds / symbol 變動皆觸發重連
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, barSeconds]);
+  }, [url, barSeconds, symbol]);
 
   return { bars, currentBar, isConnected, error };
 }

@@ -11,7 +11,22 @@
       "Bash(npm install *)",
       "Bash(node -e \"const p = require\\('./node_modules/ai/package.json'\\); const g = require\\('./node_modules/@ai-sdk/google/package.json'\\); console.log\\('ai', p.version\\); console.log\\('@ai-sdk/google', g.version\\);\")",
       "Bash(node -e \"console.log\\('dexie', require\\('./node_modules/dexie/package.json'\\).version\\); console.log\\('novel', require\\('./node_modules/novel/package.json'\\).version\\); console.log\\('@tanstack/react-table', require\\('./node_modules/@tanstack/react-table/package.json'\\).version\\); console.log\\('zustand', require\\('./node_modules/zustand/package.json'\\).version\\);\")",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(timeout 8 python -m uvicorn backend.main:app --port 8000)",
+      "Bash(python -m uvicorn backend.main:app --port 8000)",
+      "Bash(echo \"PID=$!\")",
+      "Bash(curl -s http://127.0.0.1:8000/health)",
+      "Read(//tmp/**)",
+      "Bash(kill %1)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist)",
+      "Bash(taskkill //F //PID 38456)",
+      "Bash(taskkill //F //PID 12144)",
+      "PowerShell(.\\\\scripts\\\\start-backend.ps1)",
+      "Bash(gh auth *)",
+      "Bash(awk -F/ '{print $1}')",
+      "Bash(git rm *)",
+      "Bash(git add *)"
     ]
   }
 }

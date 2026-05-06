@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from typing import Final
 
@@ -87,14 +88,24 @@ async def _consumer_loop() -> None:
             try:
                 current_bar, just_closed = state.aggregator.feed(tick)
             except Exception as exc:  # noqa: BLE001
+                print(f"[CRASH] consumer feed: {exc}")
+                traceback.print_exc()
                 logger.exception("aggregator feed failed: %s", exc)
                 continue
 
-            if just_closed is not None:
-                await _broadcast({"type": "bar_close", "data": just_closed})
-            await _broadcast({"type": "bar_update", "data": current_bar})
+            try:
+                if just_closed is not None:
+                    await _broadcast({"type": "bar_close", "data": just_closed})
+                await _broadcast({"type": "bar_update", "data": current_bar})
+            except Exception as exc:  # noqa: BLE001
+                print(f"[CRASH] consumer broadcast: {exc}")
+                traceback.print_exc()
     except asyncio.CancelledError:
         logger.info("consumer loop cancelled")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        print(f"[CRASH] consumer loop: {exc}")
+        traceback.print_exc()
         raise
 
 
@@ -103,11 +114,25 @@ async def _consumer_loop() -> None:
 # ============================================================
 
 
+def handle_task_exception(task: asyncio.Task) -> None:
+    if not task.cancelled():
+        exc = task.exception()
+        if exc:
+            print(f"[CRASH] task {task.get_name()}: {exc!r}")
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.tick_generator = MockTickGenerator(state.tick_queue)
-    state.tasks.append(asyncio.create_task(state.tick_generator.run(), name="mock-gen"))
-    state.tasks.append(asyncio.create_task(_consumer_loop(), name="consumer"))
+
+    gen_task = asyncio.create_task(state.tick_generator.run(), name="mock-gen")
+    gen_task.add_done_callback(handle_task_exception)
+    state.tasks.append(gen_task)
+
+    consumer_task = asyncio.create_task(_consumer_loop(), name="consumer")
+    consumer_task.add_done_callback(handle_task_exception)
+    state.tasks.append(consumer_task)
     logger.info("backend lifespan startup complete")
     try:
         yield
