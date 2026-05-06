@@ -1,0 +1,44 @@
+# Scraping
+playwright>=1.48.0
+playwright-stealth==1.0.6
+httpx==0.27.0
+fake-useragent==1.5.1
+cloudscraper==1.2.71
+beautifulsoup4==4.12.3
+
+# Data
+pandas>=2.3.2
+numpy>=2.2.6
+duckdb>=1.1.1
+pandas-ta
+scipy>=1.13.1
+pyarrow>=18.0.0
+
+# Config / Validation
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+python-dotenv==1.0.1
+pyyaml>=6.0.2
+
+# Scheduling
+apscheduler==3.10.4
+
+# Telegram
+python-telegram-bot==21.3
+
+# Utilities
+loguru==0.7.2
+tenacity==8.3.0
+aiofiles==23.2.1
+
+# 量縮不破低掃描
+yfinance>=0.2.54
+tqdm>=4.66.0
+
+# K 線繪圖 + Fibonacci 回調
+mplfinance>=0.12.10b0
+matplotlib>=3.8
+
+# Dashboard API
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0

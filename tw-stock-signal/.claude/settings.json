@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import sys, importlib; missing=[m for m in ['pandas','numpy','loguru','httpx','telegram','apscheduler','duckdb','mplfinance'] if not importlib.util.find_spec(m)]; print('PREFLIGHT OK' if not missing else f'MISSING DEPS: {missing}'); sys.exit(1 if missing else 0)\" 2>&1 | head -3",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone *)",
+      "Bash(python scan_ma240_rising.py)",
+      "Bash(grep -v \"^$\")",
+      "Bash(\"C:/Users/sfudally/Desktop/code test/tw-stock-signal/.venv/Scripts/pip3.exe\" install lxml html5lib beautifulsoup4)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"const p = require\\('./node_modules/ai/package.json'\\); const g = require\\('./node_modules/@ai-sdk/google/package.json'\\); console.log\\('ai', p.version\\); console.log\\('@ai-sdk/google', g.version\\);\")",
+      "Bash(node -e \"console.log\\('dexie', require\\('./node_modules/dexie/package.json'\\).version\\); console.log\\('novel', require\\('./node_modules/novel/package.json'\\).version\\); console.log\\('@tanstack/react-table', require\\('./node_modules/@tanstack/react-table/package.json'\\).version\\); console.log\\('zustand', require\\('./node_modules/zustand/package.json'\\).version\\);\")"
+    ]
+  }
+}

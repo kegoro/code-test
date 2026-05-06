@@ -1,0 +1,42 @@
+@import "../styles/tokens.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body { height: 100%; }
+  body {
+    background: rgb(var(--bg-base));
+    color: rgb(var(--fg-primary));
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+}
+
+@layer utilities {
+  @keyframes tick-flash {
+    0%   { filter: brightness(1.6); transform: scale(1.04); }
+    60%  { filter: brightness(1.0); transform: scale(1.0); }
+    100% { filter: brightness(1.0); transform: scale(1.0); }
+  }
+  .animate-tick-flash {
+    animation: tick-flash 200ms ease-out;
+  }
+}
+
+@layer components {
+  .panel {
+    background: rgb(var(--bg-surface));
+    border: 1px solid rgb(var(--border-subtle));
+    border-radius: 6px;
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgb(var(--border-subtle));
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgb(var(--fg-muted));
+  }
+}
