@@ -25,6 +25,7 @@ import { saveTradeLog, makeId, type TradeLog } from "@/data/journal-db";
 import { useCallback, useRef } from "react";
 import { useLiveTicks } from "@/hooks/useLiveTicks";
 import { FootprintChart } from "@/components/charts/FootprintChart";
+import { SetupScannerPanel } from "@/components/scanner/SetupScannerPanel";
 
 type ChartView = "kline" | "footprint";
 
@@ -219,6 +220,7 @@ export function DashboardClient() {
           symbol={selectedSymbol}
         />
         <RriGauge value={rriMock.value} />
+        <SetupScannerPanel onSymbolSelect={setSelectedSymbol} />
       </div>
 
       {toast && (

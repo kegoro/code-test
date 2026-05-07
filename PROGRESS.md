@@ -1,9 +1,74 @@
 # Quant Terminal — PROGRESS
 
-最後更新：2026-05-05
+最後更新：2026-05-07
 
 ## 目前階段
-**Phase 4：Telegram 推播 + Vercel 部署準備（程式完成，等使用者推到 GitHub + 設環境變數）**
+**Phase 5 ✅ 完成：A 級掃描面板 UI + FinMind 真實資料接入**
+
+### 本階段交付檔案
+- `backend/scanner_models.py`
+- `backend/volume_profile.py`
+- `backend/scanner_a1.py`
+- `backend/scanner_a2.py`
+- `backend/no_trade_guard.py`
+- `backend/scanner_scheduler.py`
+- `backend/finmind_fetcher.py`
+- `src/components/scanner/SetupScannerPanel.tsx`
+
+### 下一步
+- 升級 FinMind 付費 tier 或接入永豐 Shioaji 解鎖 M3 即時掃描
+
+---
+
+## Phase 5 Hotfix ✅ FinMind 真實資料源串接（2026-05-07）
+
+- 新增 `backend/finmind_fetcher.py`：
+  - `finmind_fetch_daily(symbol, lookback)` — `TaiwanStockPrice` daily OHLCV，欄位重命名 `max→high / min→low / Trading_Volume→volume`
+  - `finmind_fetch_m3(symbol, day)` — `TaiwanStockKBar` 1 分鐘線 → `resample("3min")`
+  - `parse_symbols_env()` — 讀 `SCANNER_SYMBOLS`，預設 6 檔（2382/2330/2449/2317/3231/6515）
+  - 速率限制 0.5s/req、exponential backoff 最多 3 次
+  - `FinMindPaywallError` typed exception：偵測 `"level is register"` / `"update your user level"` 回應，**不重試** 並標記全域 `_intraday_paywalled`
+- `backend/main.py` lifespan：啟動時 `logger.info("scanner symbols: %s", symbols)`，從 `SCANNER_MARKET_HOURS_ONLY` env 讀取盤中限制旗標
+- 驗證結果（盤後測試）：
+  - 6 檔日線全部 200 OK 成功取回
+  - `TaiwanStockKBar` 因免費 tier 受限回 400 → 自動切到 daily-fallback（用日線當 m3 輸入），不 crash、不重試
+  - `GET /api/scanner/setups` 返回 `{"signals": []}`（合理：日線粒度 + 條件嚴格 + 標的多在 VA 之上脫離 sweep 區）
+  - 真實 Volume Profile 範例：2330 POC=2055 / VAH=2200.5 / VAL=1925；2382 POC=321 / VAH=330.5 / VAL=303
+- `.env.example` 補上 `SCANNER_SYMBOLS` 與 `SCANNER_MARKET_HOURS_ONLY`
+- 註：要取得真正 3 分鐘線跑出 A1/A2 即時信號，需把 FinMind 帳號升級到付費 tier；其餘程式無需改動
+
+---
+
+## Phase 5 已完成（2026-05-07）
+
+### 後端掃描引擎（純函數設計，可重用於回測）
+- `backend/scanner_models.py`：`SetupSignal` / `ConditionCheck` / `VolumeProfileSnapshot` 等型別 + 常數（A1: 6/6 A 級、5/6 B 級；A2: 5/5 A 級、4/5 B 級；DEDUP_WINDOW=30 分鐘）
+- `backend/volume_profile.py`：TPO 直方圖 + 70% Value Area + scipy.find_peaks 找 LVN/HVN（6 個 pytest）
+- `backend/scanner_a1.py`：VA Edge Sweep Reversal — 6 條件（C1 Profile 形狀 / C2 wick 觸 VA / C3+C4 sweep+收回 / C5 POC 穩定 / C6 MSS / C7 Footprint 支撐）（3 個 pytest）
+- `backend/scanner_a2.py`：LVN Acceptance Breakout — 2 前提 + 5 濾網（PRE1 ATR 收縮 / PRE2 LVN 鄰近；F1 量放大 / F2 Delta / F3 Stacked Imbalance / F4 收盤強度 / F5 回測不被吸收）+ R:R ≥ 1.5 過濾（3 個 pytest）
+- `backend/no_trade_guard.py`：8 條硬性 NO TRADE（事件窗 / VA 中央死區 / HTF bias 不明 / 缺 body MSS / Footprint 衝突 / R:R 不足 / 連虧或日損 / spread 異常）
+
+### 排程器與 SSE 推播
+- `backend/scanner_scheduler.py`：`ScannerEngine` — asyncio loop，每 180 秒執行，盤後自動跳過；dedup 30 分鐘；SSE queue broadcast；信號過期主動推 `expire`
+- `backend/main.py` 新增端點（不破壞 Phase 1-4 任何路由）：
+  - `GET  /api/scanner/setups`           當前所有有效信號
+  - `GET  /api/scanner/setups/{symbol}`  特定標的
+  - `GET  /api/scanner/stream`           Server-Sent Events 即時流
+
+### 前端整合
+- `src/components/scanner/SetupScannerPanel.tsx`：右側面板新增掃描表格（代碼/Setup/評分/進場-停損/R:R），SSE 即時更新；A 級綠、B 級黃、失效灰刪除線
+- `src/lib/telegram-message.ts`：新增 `scanner-a1` / `scanner-a2` payload kind + 訊息文案
+- `src/components/dashboard/TelegramStatus.tsx`：補上對應標籤
+- `src/app/api/telegram/route.ts`：未動（自動透過 `isTelegramPayload` 接受新 kind）
+- `src/components/dashboard/DashboardClient.tsx`：在右側欄底部嵌入 `<SetupScannerPanel />`
+
+### 測試 & 構建
+- 後端：12 個 pytest 通過（volume_profile + scanner_a1 + scanner_a2）
+- 前端：**94 / 94 vitest 通過**（原 29 + 既有其他測試）
+- `npm run build` ✅ 通過 TypeScript 嚴格模式
+- 後端啟動驗證：`/api/scanner/setups` 回傳 `{"signals": []}`（預設空 fetcher）
+
+---
 
 ---
 

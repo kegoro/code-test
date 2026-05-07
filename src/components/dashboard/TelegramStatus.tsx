@@ -7,6 +7,8 @@ const KIND_LABEL: Record<AlertEvent["kind"], string> = {
   "grade-a": "A 級觸發",
   "entry-s4": "進場 S4",
   "raw": "通知",
+  "scanner-a1": "A1 掃描",
+  "scanner-a2": "A2 掃描",
 };
 
 const STATUS_TONE: Record<AlertEvent["status"], string> = {

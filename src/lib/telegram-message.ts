@@ -26,7 +26,25 @@ export interface RawPayload {
   text: string;
 }
 
-export type TelegramPayload = GradeAPayload | EntryS4Payload | RawPayload;
+export interface ScannerPayload {
+  kind: "scanner-a1" | "scanner-a2";
+  symbol: string;
+  name: string;
+  direction: "LONG" | "SHORT";
+  grade: "A" | "B";
+  scorePassed: number;
+  scoreTotal: number;
+  entry: number;
+  stop: number;
+  target: number;
+  conditions: { code: string; passed: boolean }[];
+}
+
+export type TelegramPayload =
+  | GradeAPayload
+  | EntryS4Payload
+  | RawPayload
+  | ScannerPayload;
 
 export function isTelegramPayload(value: unknown): value is TelegramPayload {
   if (typeof value !== "object" || value === null) return false;
@@ -34,6 +52,18 @@ export function isTelegramPayload(value: unknown): value is TelegramPayload {
   if (r["kind"] === "raw") return typeof r["text"] === "string";
   if (r["kind"] === "grade-a" || r["kind"] === "entry-s4") {
     return typeof r["symbol"] === "string" && typeof r["name"] === "string";
+  }
+  if (r["kind"] === "scanner-a1" || r["kind"] === "scanner-a2") {
+    return (
+      typeof r["symbol"] === "string" &&
+      typeof r["name"] === "string" &&
+      (r["direction"] === "LONG" || r["direction"] === "SHORT") &&
+      (r["grade"] === "A" || r["grade"] === "B") &&
+      typeof r["entry"] === "number" &&
+      typeof r["stop"] === "number" &&
+      typeof r["target"] === "number" &&
+      Array.isArray(r["conditions"])
+    );
   }
   return false;
 }
@@ -76,10 +106,13 @@ export function buildTelegramMessage(payload: TelegramPayload): string {
 
   const sym = `<code>${escapeHtml(payload.symbol)}</code>`;
   const nm = escapeHtml(payload.name);
-  const quoteLine = payload.quote
-    ? `目前報價：<b>${fmtPrice(payload.quote.last)}</b> (${fmtPct(payload.quote.changePct)})`
-    : "目前報價：—";
   const time = `時間：<code>${escapeHtml(nowTaipei())}</code>`;
+  const quoteLine =
+    payload.kind === "grade-a" || payload.kind === "entry-s4"
+      ? payload.quote
+        ? `目前報價：<b>${fmtPrice(payload.quote.last)}</b> (${fmtPct(payload.quote.changePct)})`
+        : "目前報價：—"
+      : "";
 
   if (payload.kind === "grade-a") {
     const { a, b, c } = payload.scores;
@@ -93,12 +126,29 @@ export function buildTelegramMessage(payload: TelegramPayload): string {
     ].join("\n");
   }
 
+  if (payload.kind === "entry-s4") {
+    return [
+      "🟢 <b>[進場觸發 — S4 Entry]</b>",
+      `${sym} ${nm}`,
+      quoteLine,
+      `評分：<b>${escapeHtml(payload.grade)} 級</b>`,
+      "狀態：允許進場 (S4)",
+      time,
+    ].join("\n");
+  }
+
+  // scanner-a1 / scanner-a2
+  const setupTag = payload.kind === "scanner-a1" ? "A1 Setup" : "A2 Setup";
+  const dirArrow = payload.direction === "LONG" ? "↑" : "↓";
+  const condLine = payload.conditions
+    .map((c) => `${escapeHtml(c.code)}${c.passed ? "✅" : "❌"}`)
+    .join(" ");
   return [
-    "🟢 <b>[進場觸發 — S4 Entry]</b>",
-    `${sym} ${nm}`,
-    quoteLine,
-    `評分：<b>${escapeHtml(payload.grade)} 級</b>`,
-    "狀態：允許進場 (S4)",
+    `🎯 <b>[${setupTag} 觸發 — ${escapeHtml(payload.grade)}級]</b>`,
+    `${sym} ${nm} | ${escapeHtml(payload.direction)}${dirArrow}`,
+    `進場：<b>${fmtPrice(payload.entry)}</b> | 停損：${fmtPrice(payload.stop)} | TP：${fmtPrice(payload.target)}`,
+    `評分：<b>${payload.scorePassed}/${payload.scoreTotal}</b>`,
+    `條件：${condLine}`,
     time,
   ].join("\n");
 }

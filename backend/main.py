@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import traceback
 from contextlib import asynccontextmanager
 from typing import Final
@@ -23,11 +24,14 @@ from typing import Final
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi.responses import StreamingResponse
+
 from backend.footprint_aggregator import (
     DEFAULT_BAR_SECONDS,
     StreamingFootprintAggregator,
 )
 from backend.mock_tick_generator import DEFAULT_QUEUE_MAXSIZE, MockTickGenerator
+from backend.scanner_scheduler import ScannerEngine
 
 logger = logging.getLogger("footprint-backend")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,6 +55,7 @@ class AppState:
         self.ws_lock = asyncio.Lock()
         self.tick_generator: MockTickGenerator | None = None
         self.tasks: list[asyncio.Task] = []
+        self.scanner: ScannerEngine | None = None
 
 
 state = AppState()
@@ -124,7 +129,17 @@ def handle_task_exception(task: asyncio.Task) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from backend.finmind_fetcher import finmind_fetch, parse_symbols_env
+
     state.tick_generator = MockTickGenerator(state.tick_queue)
+
+    symbols = parse_symbols_env()
+    market_only = os.getenv("SCANNER_MARKET_HOURS_ONLY", "true").lower() != "false"
+    logger.info("scanner symbols: %s (market_hours_only=%s)", symbols, market_only)
+    state.scanner = ScannerEngine(
+        symbols=symbols, fetch=finmind_fetch, market_hours_only=market_only
+    )
+    state.scanner.start()
 
     gen_task = asyncio.create_task(state.tick_generator.run(), name="mock-gen")
     gen_task.add_done_callback(handle_task_exception)
@@ -138,6 +153,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("backend lifespan shutdown")
+        if state.scanner is not None:
+            await state.scanner.stop()
         if state.tick_generator is not None:
             state.tick_generator.stop()
         for t in state.tasks:
@@ -233,3 +250,45 @@ async def ws_footprint(ws: WebSocket) -> None:
             await ws.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+# ============================================================
+# Scanner endpoints (Phase 5)
+# ============================================================
+
+
+@app.get("/api/scanner/setups")
+async def scanner_setups() -> dict[str, object]:
+    if state.scanner is None:
+        return {"signals": []}
+    return {"signals": state.scanner.active_signals()}
+
+
+@app.get("/api/scanner/setups/{symbol}")
+async def scanner_setups_symbol(symbol: str) -> dict[str, object]:
+    if state.scanner is None:
+        return {"signals": []}
+    return {"signals": state.scanner.active_signals(symbol=symbol)}
+
+
+@app.get("/api/scanner/stream")
+async def scanner_stream() -> StreamingResponse:
+    if state.scanner is None:
+        async def _empty():
+            yield "data: {}\n\n"
+        return StreamingResponse(_empty(), media_type="text/event-stream")
+
+    queue = state.scanner.subscribe()
+
+    async def event_gen():
+        try:
+            yield "event: ready\ndata: {}\n\n"
+            while True:
+                payload = await queue.get()
+                yield f"data: {json.dumps(payload, default=str)}\n\n"
+        except asyncio.CancelledError:
+            raise
+        finally:
+            state.scanner.unsubscribe(queue) if state.scanner else None
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
