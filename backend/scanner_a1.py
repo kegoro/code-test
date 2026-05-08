@@ -7,6 +7,13 @@ from typing import Final
 import numpy as np
 import pandas as pd
 
+from backend.order_block import (
+    OrderBlock,
+    detect_bearish_ob,
+    detect_bullish_ob,
+    is_price_in_ob,
+    latest_valid_ob,
+)
 from backend.scanner_models import (
     A1_GRADE_A_MIN,
     A1_GRADE_B_MIN,
@@ -143,11 +150,36 @@ def _check_mss(
     return ConditionCheck("C6", "MSS body-close confirmed", confirmed, f"pivot={pivot:.2f}")
 
 
-def _check_footprint_support(
+def _check_order_block(
     df_m3: pd.DataFrame, sweep_idx: int, direction: Direction | None
+) -> tuple[ConditionCheck, OrderBlock | None]:
+    """C7d: sweep extreme falls inside the latest valid Bullish/Bearish OB."""
+    if direction is None or sweep_idx < 0 or df_m3 is None or df_m3.empty:
+        return ConditionCheck("C7d", "Sweep into valid Order Block", False, "no sweep"), None
+    bar = df_m3.iloc[sweep_idx]
+    if direction is Direction.LONG:
+        obs = detect_bullish_ob(df_m3.iloc[: sweep_idx + 1])
+        ob = latest_valid_ob(obs)
+        if ob is None:
+            return ConditionCheck("C7d", "Sweep into valid Order Block", False, "no bullish OB"), None
+        sweep_extreme = float(bar["low"])
+    else:
+        obs = detect_bearish_ob(df_m3.iloc[: sweep_idx + 1])
+        ob = latest_valid_ob(obs)
+        if ob is None:
+            return ConditionCheck("C7d", "Sweep into valid Order Block", False, "no bearish OB"), None
+        sweep_extreme = float(bar["high"])
+    inside = is_price_in_ob(sweep_extreme, ob)
+    detail = f"OB[{ob['ob_low']:.2f},{ob['ob_high']:.2f}] sweep={sweep_extreme:.2f}"
+    return ConditionCheck("C7d", "Sweep into valid Order Block", inside, detail), ob
+
+
+def _check_footprint_support(
+    df_m3: pd.DataFrame, sweep_idx: int, direction: Direction | None,
+    c7d_passed: bool = False,
 ) -> ConditionCheck:
     if direction is None or sweep_idx < 0:
-        return ConditionCheck("C7", "Footprint support (>=2 of 3)", False, "no sweep")
+        return ConditionCheck("C7", "Footprint support (>=2 of 4)", False, "no sweep")
     bar = df_m3.iloc[sweep_idx]
     avg_vol = float(df_m3["volume"].astype(float).tail(20).mean()) or 1.0
     avg_range = float(
@@ -180,13 +212,13 @@ def _check_footprint_support(
     else:
         c7c = False
 
-    score = sum([bool(c7a), bool(c7b), bool(c7c)])
+    score = sum([bool(c7a), bool(c7b), bool(c7c), bool(c7d_passed)])
     passed = score >= 2
     return ConditionCheck(
         "C7",
-        "Footprint support (>=2 of 3)",
+        "Footprint support (>=2 of 4)",
         passed,
-        f"a={c7a} b={c7b} c={c7c}",
+        f"a={c7a} b={c7b} c={c7c} d={c7d_passed}",
     )
 
 
@@ -229,9 +261,11 @@ def scan_a1(
     c34, direction, sweep_idx = _check_sweep_and_recover(df_m3, profile)
     c5 = _check_poc_stable(df_m3, sweep_idx, profile)
     c6 = _check_mss(df_m3, sweep_idx, direction)
-    c7 = _check_footprint_support(df_m3, sweep_idx, direction)
+    c7d, _ob = _check_order_block(df_m3, sweep_idx, direction)
+    c7 = _check_footprint_support(df_m3, sweep_idx, direction, c7d_passed=c7d.passed)
 
-    conditions = (c1, c2, c34, c5, c6, c7)
+    # C7d is recorded for downstream consumers (engine reads it for ob_confirmed).
+    conditions = (c1, c2, c34, c5, c6, c7, c7d)
     score = sum(1 for c in conditions if c.passed)
 
     if score >= A1_GRADE_A_MIN:

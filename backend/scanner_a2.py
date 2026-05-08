@@ -20,7 +20,7 @@ from backend.scanner_models import (
 )
 
 
-LVN_PROXIMITY_PCT: Final[float] = 0.003
+LVN_PROXIMITY_PCT: Final[float] = 0.010
 ATR_CONTRACTION_LOOKBACK: Final[int] = 5
 ATR_CONTRACTION_MIN_PCT: Final[float] = 0.20
 VOLUME_BREAKOUT_MULT: Final[float] = 1.5

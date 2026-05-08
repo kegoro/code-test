@@ -1,0 +1,36 @@
+========================================================================
+BACKTEST SUMMARY
+========================================================================
+Period         : 2023-01-01 → 2026-05-07
+Symbols        : 2382, 2330, 2449
+Setups         : A1, A2
+Stop mode      : both
+Initial capital: $1,000,000  Risk/trade: 1.00%
+Symbols processed: 3  Bars evaluated: 2316
+------------------------------------------------------------------------
+Trades         : 356  (wins 198 / losses 158)
+Win rate       : 55.62%
+Avg R          : -0.064   (avg win +0.47 / avg loss -0.73)
+Profit factor  : 0.80
+Max drawdown   : -28.02%  ($-280,248)
+Sharpe         : -0.49   Calmar: -0.25
+Total return   : -22.67%   Final equity: $773,338
+------------------------------------------------------------------------
+Setup breakdown (A1 vs A2):
+       n_trades  win_rate  avg_r  total_r  profit_factor
+setup                                                   
+A1          352     0.557 -0.086  -30.224          0.739
+A2            4     0.500  1.889    7.558         35.391
+------------------------------------------------------------------------
+Stop-mode breakdown (fixed vs ATR):
+           n_trades  win_rate  avg_r  total_r  profit_factor
+stop_mode                                                   
+atr             178     0.494 -0.149  -26.473          0.704
+fixed           178     0.618  0.021    3.807          1.143
+------------------------------------------------------------------------
+Order Block breakdown (True=C7d passed, False=not):
+              n_trades  win_rate  avg_r  total_r  profit_factor
+ob_confirmed                                                   
+False               50     0.420 -0.071   -3.558          0.835
+True               306     0.578 -0.062  -19.108          0.798
+========================================================================

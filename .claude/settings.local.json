@@ -58,7 +58,16 @@
       "Bash(pkill -9 -f \"uvicorn|python.*backend\")",
       "Bash(lsof -ti:8001)",
       "Bash(xargs -r kill -9)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(venv/Scripts/python.exe -m pytest backend/backtest_engine.py -x -q)",
+      "Bash(venv/Scripts/python.exe -c \"from backend.backtest_engine import BacktestEngine, BacktestConfig, _synthetic_daily; df=_synthetic_daily\\(bars=120\\); e=BacktestEngine\\({'T':df}\\); r=e.run\\(BacktestConfig\\(symbols=['T'], start_date=str\\(df.index[0].date\\(\\)\\), end_date=str\\(df.index[-1].date\\(\\)\\), stop_mode='both'\\)\\); print\\('symbols_processed', r.symbols_processed\\); print\\('trades', len\\(r.trades\\)\\); print\\('bars_evaluated', r.bars_evaluated\\)\")",
+      "Bash(python-feeder/venv/Scripts/python.exe -c \"import numpy, pandas, scipy, dotenv, httpx; print\\('ok'\\)\")",
+      "Bash(py -c \"import numpy, pandas, scipy; print\\(numpy.__version__, pandas.__version__\\)\")",
+      "Bash(python -c \"import plotly; print\\(plotly.__version__\\)\")",
+      "Bash(pip install *)",
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330 --start 2023-01-01 --end 2026-05-07 --stop-mode both --out reports/run_2026-05-07)",
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449 --start 2023-01-01 --end 2026-05-07 --stop-mode both --out reports/run_v2_2026-05-07)",
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449,2317,3231 --start 2023-01-01 --end 2026-05-07 --stop-mode fixed --risk-per-trade 0.005 --out reports/run_v5)"
     ]
   }
 }
