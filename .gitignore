@@ -20,3 +20,8 @@ tsconfig.tsbuildinfo
 
 # Misc
 新增資料夾/
+
+# Local data caches and runtime artifacts
+.cache/
+data/shioaji_m3/
+logs/

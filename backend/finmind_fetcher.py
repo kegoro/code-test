@@ -196,12 +196,12 @@ async def finmind_fetch_daily(symbol: str, lookback: int = 20) -> pd.DataFrame:
 _intraday_paywalled: bool = False
 
 
-async def finmind_fetch_m3(symbol: str, day: date | str | None = None) -> pd.DataFrame:
+async def finmind_fetch_m3(symbol: str, day: date | str | None = None) -> pd.DataFrame:  # noqa: C901
     """Fetch 3-minute OHLCV for `symbol` on `day` (default = latest trading day).
 
-    FinMind's intraday dataset (`TaiwanStockKBar`) requires a paid tier. On a free
-    account we receive HTTP 400 with "Your level is register..." — we mark the
-    flag and return an empty frame so callers can decide to fall back.
+    Uses FinMind's KBar endpoint which requires a paid tier.  On a free FinMind
+    account the call is paywalled — we mark the flag and return an empty frame so
+    callers can fall back.
     """
     global _intraday_paywalled
     if _intraday_paywalled:

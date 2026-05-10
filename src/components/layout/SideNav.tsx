@@ -16,12 +16,14 @@ const items: readonly NavItem[] = [
   { key: "chart",   label: "圖表",   icon: "▦", href: "/" },
   { key: "score",   label: "評分",   icon: "★", href: "/" },
   { key: "risk",    label: "風控",   icon: "⚠", href: "/" },
+  { key: "backtest", label: "回測", icon: "⌖", href: "/backtest" },
   { key: "journal", label: "日誌",   icon: "✎", href: "/journal" },
 ];
 
 function isActive(pathname: string | null, item: NavItem): boolean {
   if (!pathname) return false;
   if (item.key === "journal") return pathname.startsWith("/journal");
+  if (item.key === "backtest") return pathname.startsWith("/backtest");
   if (item.key === "watch") return pathname === "/";
   return false;
 }

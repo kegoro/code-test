@@ -41,6 +41,11 @@ from backend.finmind_fetcher import (
     _to_iso,
     _token,
 )
+from backend.shioaji_history_cache import (
+    build_cache as build_m3_cache,
+    concat_history,
+    load_cached_m3,
+)
 
 logger = logging.getLogger("backtest-runner")
 
@@ -131,9 +136,30 @@ async def run_backtest(
     risk_per_trade: float = 0.01,
     cache_dir: Path = DEFAULT_CACHE_DIR,
     refresh: bool = False,
+    data_source: str = "finmind",
+    m3_history_days: int = 30,
 ) -> tuple[BacktestResult, BacktestReport]:
-    data = await fetch_all(symbols, start, end, cache_dir=cache_dir, refresh=refresh)
-    engine = BacktestEngine(data)
+    fetch_start = (
+        datetime.fromisoformat(start[:10]) - pd.Timedelta(days=180)
+    ).date().isoformat()
+    data = await fetch_all(symbols, fetch_start, end, cache_dir=cache_dir, refresh=refresh)
+    m3_store: dict[str, pd.DataFrame] = {}
+    if data_source == "shioaji":
+        try:
+            history = await build_m3_cache(symbols, days=m3_history_days, refresh=refresh)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("shioaji cache build failed (%s); using cached files only", exc)
+            history = {sym: load_cached_m3(sym) for sym in symbols}
+        for sym, days_map in history.items():
+            df = concat_history(days_map)
+            if not df.empty:
+                m3_store[sym] = df
+        logger.info(
+            "loaded real M3 cache for %d/%d symbols",
+            sum(1 for v in m3_store.values() if not v.empty),
+            len(symbols),
+        )
+    engine = BacktestEngine(data, m3_store=m3_store or None)
     cfg = BacktestConfig(
         symbols=symbols,
         start_date=start,
@@ -213,6 +239,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--out", default="reports/backtest", help="Output directory for HTML+CSV")
     p.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     p.add_argument("--refresh", action="store_true", help="Bypass cache and re-fetch")
+    p.add_argument(
+        "--data-source",
+        default="finmind",
+        choices=["finmind", "shioaji"],
+        help="Daily source is always FinMind; 'shioaji' additionally loads real M3 from data/shioaji_m3/",
+    )
+    p.add_argument("--m3-history-days", type=int, default=30)
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -238,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             risk_per_trade=args.risk_per_trade,
             cache_dir=Path(args.cache_dir),
             refresh=args.refresh,
+            data_source=args.data_source,
+            m3_history_days=args.m3_history_days,
         )
     )
 

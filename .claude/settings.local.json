@@ -67,7 +67,16 @@
       "Bash(pip install *)",
       "Bash(python -m backend.backtest_runner --symbols 2382,2330 --start 2023-01-01 --end 2026-05-07 --stop-mode both --out reports/run_2026-05-07)",
       "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449 --start 2023-01-01 --end 2026-05-07 --stop-mode both --out reports/run_v2_2026-05-07)",
-      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449,2317,3231 --start 2023-01-01 --end 2026-05-07 --stop-mode fixed --risk-per-trade 0.005 --out reports/run_v5)"
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449,2317,3231 --start 2023-01-01 --end 2026-05-07 --stop-mode fixed --risk-per-trade 0.005 --out reports/run_v5)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/main.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"from backend import main; print\\('imports OK'\\)\")",
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('\\\\n'.join\\(sorted\\(d.get\\('paths',{}\\).keys\\(\\)\\)\\)\\)\")",
+      "Bash(curl *)",
+      "Bash(python -m backend.shioaji_history_cache --symbols 2382,2330,2449,2317,3231 --days 30 -v)",
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449,2317,3231 --start 2026-04-01 --stop-mode fixed --risk-per-trade 0.005 --data-source shioaji --out reports/run_v5_real_m3)",
+      "Bash(python -m backend.backtest_runner --symbols 2382,2330,2449,2317,3231 --start 2026-04-01 --stop-mode fixed --risk-per-trade 0.005 --out reports/run_v4_daily_same_period)",
+      "PowerShell(.\\\\scripts\\\\start-backend-daemon.ps1)"
     ]
   }
 }

@@ -119,9 +119,28 @@ def _atr_series(df: pd.DataFrame, period: int) -> pd.Series:
 class BacktestEngine:
     """Runs the rolling backtest. Stateless — call `run` per config."""
 
-    def __init__(self, data: dict[str, pd.DataFrame]):
-        """`data` maps symbol → daily OHLCV dataframe (DatetimeIndex)."""
+    def __init__(
+        self,
+        data: dict[str, pd.DataFrame],
+        m3_store: dict[str, pd.DataFrame] | None = None,
+    ):
+        """`data` maps symbol → daily OHLCV.
+
+        ``m3_store`` (optional) maps symbol → concatenated M3 OHLCV across the
+        full backtest window. When provided, the engine slices ``m3_store[sym]``
+        up to end-of-day ``t`` and feeds those real M3 bars to the scanners
+        instead of the daily-tail pseudo-M3.
+        """
         self._data = {s: self._prep(df) for s, df in data.items() if df is not None}
+        self._m3_store: dict[str, pd.DataFrame] = {}
+        if m3_store:
+            for sym, df in m3_store.items():
+                if df is None or df.empty:
+                    continue
+                cleaned = df.copy()
+                if not isinstance(cleaned.index, pd.DatetimeIndex):
+                    cleaned.index = pd.to_datetime(cleaned.index)
+                self._m3_store[sym] = cleaned.sort_index()
 
     @staticmethod
     def _prep(df: pd.DataFrame) -> pd.DataFrame:
@@ -195,9 +214,8 @@ class BacktestEngine:
                 logger.debug("%s @ %s: profile failed: %s", symbol, today.index[-1], exc)
                 continue
 
-            # Daily-fallback: pseudo-m3 = recent daily window
-            df_pseudo_m3 = today.tail(cfg.profile_lookback).copy()
-            signals = self._scan(symbol, today, df_pseudo_m3, profile, cfg)
+            df_m3 = self._m3_for(symbol, today.index[-1], cfg)
+            signals = self._scan(symbol, today, df_m3, profile, cfg)
             if not signals:
                 continue
 
@@ -237,6 +255,26 @@ class BacktestEngine:
                     self._close(trade, last_date, float(last["close"]), "EOD")
 
     # ---- helpers ----
+
+    def _m3_for(
+        self, symbol: str, today_ts: pd.Timestamp, cfg: BacktestConfig
+    ) -> pd.DataFrame:
+        """Return real M3 bars up to end-of-day ``today_ts``.
+
+        Falls back to the daily-tail pseudo when no M3 cache is available
+        for ``symbol`` or for the requested day.
+        """
+        store = self._m3_store.get(symbol)
+        daily = self._data.get(symbol)
+        if store is None or store.empty:
+            return daily.loc[:today_ts].tail(cfg.profile_lookback).copy()
+        cutoff = pd.Timestamp(today_ts).normalize() + pd.Timedelta(days=1)
+        sliced = store.loc[store.index < cutoff]
+        if sliced.empty:
+            return daily.loc[:today_ts].tail(cfg.profile_lookback).copy()
+        # cap at a reasonable lookback so scanners don't drown in months of M3
+        max_bars = max(cfg.profile_lookback * 30, 500)
+        return sliced.tail(max_bars).copy()
 
     @staticmethod
     def _modes_for(mode: StopMode) -> tuple[str, ...]:

@@ -21,8 +21,14 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Final
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from fastapi.responses import StreamingResponse
 
@@ -32,6 +38,8 @@ from backend.footprint_aggregator import (
 )
 from backend.mock_tick_generator import DEFAULT_QUEUE_MAXSIZE, MockTickGenerator
 from backend.scanner_scheduler import ScannerEngine
+from backend.backtest_report import BacktestReport
+from backend.backtest_runner import DEFAULT_CACHE_DIR, run_backtest
 
 logger = logging.getLogger("footprint-backend")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -56,6 +64,12 @@ class AppState:
         self.tick_generator: MockTickGenerator | None = None
         self.tasks: list[asyncio.Task] = []
         self.scanner: ScannerEngine | None = None
+        self.backtest_status: str = "idle"  # idle | running | ready | error
+        self.backtest_error: str | None = None
+        self.backtest_report_dict: dict | None = None
+        self.backtest_task: asyncio.Task | None = None
+        self.backtest_lock: asyncio.Lock = asyncio.Lock()
+        self.data_router: "DataSourceRouter | None" = None  # set during lifespan
 
 
 state = AppState()
@@ -129,15 +143,21 @@ def handle_task_exception(task: asyncio.Task) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from backend.finmind_fetcher import finmind_fetch, parse_symbols_env
+    from backend.finmind_fetcher import parse_symbols_env
+    from backend.data_router import DataSourceRouter
 
     state.tick_generator = MockTickGenerator(state.tick_queue)
 
     symbols = parse_symbols_env()
     market_only = os.getenv("SCANNER_MARKET_HOURS_ONLY", "true").lower() != "false"
     logger.info("scanner symbols: %s (market_hours_only=%s)", symbols, market_only)
+
+    router = DataSourceRouter()
+    await router.warmup()
+    state.data_router = router
+
     state.scanner = ScannerEngine(
-        symbols=symbols, fetch=finmind_fetch, market_hours_only=market_only
+        symbols=symbols, fetch=router, market_hours_only=market_only
     )
     state.scanner.start()
 
@@ -200,6 +220,7 @@ async def health() -> dict[str, object]:
         "ws_clients": len(state.ws_clients),
         "queue_size": state.tick_queue.qsize(),
         "history_bars": len(state.aggregator.history()),
+        "data_sources": state.data_router.status() if state.data_router else {},
     }
 
 
@@ -292,3 +313,145 @@ async def scanner_stream() -> StreamingResponse:
             state.scanner.unsubscribe(queue) if state.scanner else None
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# ============================================================
+# Backtest endpoints (P3)
+# ============================================================
+
+
+class BacktestRunRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: ["2382", "2330", "2449", "2317", "3231"])
+    start: str = "2023-01-01"
+    end: str = "2026-05-07"
+    stop_mode: str = "fixed"
+    setups: list[str] = Field(default_factory=lambda: ["A1", "A2"])
+    initial_capital: float = 1_000_000.0
+    risk_per_trade: float = 0.005
+    refresh: bool = False
+
+
+def _safe_float(v: object) -> float | None:
+    try:
+        f = float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def _df_to_records(df: pd.DataFrame, *, reset_index: bool = True) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    d = df.reset_index() if reset_index else df.copy()
+    for col in d.columns:
+        if pd.api.types.is_datetime64_any_dtype(d[col]):
+            d[col] = d[col].dt.strftime("%Y-%m-%d")
+    d = d.replace([np.inf, -np.inf], np.nan).where(pd.notnull(d), None)
+    records: list[dict] = []
+    for row in d.to_dict(orient="records"):
+        clean: dict = {}
+        for k, v in row.items():
+            if isinstance(v, (pd.Period,)):
+                clean[str(k)] = str(v)
+            elif isinstance(v, float):
+                clean[str(k)] = _safe_float(v)
+            else:
+                clean[str(k)] = v
+        records.append(clean)
+    return records
+
+
+def _report_to_dict(report: BacktestReport) -> dict:
+    cfg = report.result.config
+    c = report.core
+    return {
+        "config": {
+            "symbols": list(cfg.symbols),
+            "start_date": cfg.start_date,
+            "end_date": cfg.end_date,
+            "setup_types": list(cfg.setup_types),
+            "stop_mode": cfg.stop_mode,
+            "initial_capital": cfg.initial_capital,
+            "risk_per_trade": cfg.risk_per_trade,
+        },
+        "meta": {
+            "symbols_processed": report.result.symbols_processed,
+            "bars_evaluated": report.result.bars_evaluated,
+        },
+        "core": {
+            "n_trades": c.n_trades,
+            "n_wins": c.n_wins,
+            "n_losses": c.n_losses,
+            "win_rate": _safe_float(c.win_rate),
+            "avg_r": _safe_float(c.avg_r),
+            "avg_win_r": _safe_float(c.avg_win_r),
+            "avg_loss_r": _safe_float(c.avg_loss_r),
+            "profit_factor": _safe_float(c.profit_factor),
+            "max_drawdown_pct": _safe_float(c.max_drawdown_pct),
+            "max_drawdown_dollars": _safe_float(c.max_drawdown_dollars),
+            "sharpe": _safe_float(c.sharpe),
+            "calmar": _safe_float(c.calmar),
+            "total_return_pct": _safe_float(c.total_return_pct),
+            "final_equity": _safe_float(c.final_equity),
+        },
+        "trades": _df_to_records(report.trades_df, reset_index=False),
+        "monthly": _df_to_records(report.monthly_df),
+        "setup_breakdown": _df_to_records(report.setup_breakdown),
+        "stop_mode_breakdown": _df_to_records(report.stop_mode_breakdown),
+        "ob_breakdown": _df_to_records(report.ob_breakdown),
+        "equity_curve": _df_to_records(report.equity_curve),
+    }
+
+
+async def _run_backtest_task(req: BacktestRunRequest) -> None:
+    try:
+        state.backtest_status = "running"
+        state.backtest_error = None
+        _, report = await run_backtest(
+            symbols=req.symbols,
+            start=req.start,
+            end=req.end,
+            stop_mode=req.stop_mode,
+            setups=tuple(req.setups),
+            initial_capital=req.initial_capital,
+            risk_per_trade=req.risk_per_trade,
+            cache_dir=Path(DEFAULT_CACHE_DIR),
+            refresh=req.refresh,
+        )
+        state.backtest_report_dict = _report_to_dict(report)
+        state.backtest_status = "ready"
+        logger.info(
+            "backtest done: trades=%d win_rate=%.2f%% PF=%.2f",
+            report.core.n_trades,
+            (report.core.win_rate or 0) * 100,
+            report.core.profit_factor or 0.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("backtest failed: %s", exc)
+        state.backtest_status = "error"
+        state.backtest_error = str(exc)
+
+
+@app.post("/api/backtest/run")
+async def backtest_run(req: BacktestRunRequest) -> dict[str, object]:
+    async with state.backtest_lock:
+        if state.backtest_status == "running":
+            return {"status": "running", "message": "A backtest is already running."}
+        state.backtest_task = asyncio.create_task(
+            _run_backtest_task(req), name="backtest-run"
+        )
+        state.backtest_task.add_done_callback(handle_task_exception)
+    return {"status": "running", "config": req.model_dump()}
+
+
+@app.get("/api/backtest/result")
+async def backtest_result() -> dict[str, object]:
+    if state.backtest_status == "idle":
+        return {"status": "idle", "report": None}
+    if state.backtest_status == "running":
+        return {"status": "running", "report": None}
+    if state.backtest_status == "error":
+        raise HTTPException(status_code=500, detail=state.backtest_error or "backtest error")
+    return {"status": "ready", "report": state.backtest_report_dict}
