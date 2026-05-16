@@ -25,3 +25,14 @@ tsconfig.tsbuildinfo
 .cache/
 data/shioaji_m3/
 logs/
+
+# Runtime state (per-user watchlist & alert dedup)
+data/day_trade_watchlist.json
+data/alert_state.json
+data/*.json.tmp
+
+# Scraper probe dumps (regen with scripts/probe_aistockmap.py if needed)
+reports/aistockmap_dump.*
+reports/aistockmap_focus_dom.json
+reports/aistockmap_xhr.json
+reports/aistockmap_test.html

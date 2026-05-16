@@ -106,7 +106,16 @@ async def analyse_all(symbols: list[str], **kwargs) -> list[TradeIdea]:
 
 
 async def analyse_watchlist(**kwargs) -> list[TradeIdea]:
-    """Convenience: parse SMC_WATCHLIST env var and analyse each symbol."""
-    raw = os.getenv("SMC_WATCHLIST", "2330,2317,2382")
-    symbols = [s.strip() for s in raw.split(",") if s.strip()]
+    """掃 watchlist：優先讀 data/day_trade_watchlist.json（當沖動態），
+    為空才 fallback 到 SMC_WATCHLIST env（LESSONS.md §2.7.6 P0 #3）。"""
+    from backend import watchlist as wl_mod
+
+    persistent = wl_mod.load()
+    if persistent.entries:
+        symbols = list(persistent.symbols)
+        logger.info("analyse_watchlist: %d symbols from day_trade_watchlist.json", len(symbols))
+    else:
+        raw = os.getenv("SMC_WATCHLIST", "2330,2317,2382")
+        symbols = [s.strip() for s in raw.split(",") if s.strip()]
+        logger.info("analyse_watchlist: %d symbols from SMC_WATCHLIST env (fallback)", len(symbols))
     return await analyse_all(symbols, **kwargs)

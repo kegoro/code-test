@@ -25,10 +25,19 @@ logger = logging.getLogger("scanner-scheduler")
 
 DataFetcher = Callable[[str], Awaitable[tuple[pd.DataFrame, pd.DataFrame]]]
 NotifyFn = Callable[[SetupSignal], Awaitable[None]]
+SymbolsSource = Callable[[], list[str]]
 
 
 class ScannerEngine:
-    """Periodic scanner with dedup cache + invalidation."""
+    """Periodic scanner with dedup cache + invalidation.
+
+    Symbol set can be either:
+      - 靜態：傳 symbols=[...]，每輪固定掃這些
+      - 動態：傳 symbols_source=callable，每輪呼叫一次取最新清單
+              （對應 LESSONS.md §2.7 當沖 watchlist：UI 動態增刪要立即生效）
+    若 symbols_source 提供，會 override 靜態 symbols。
+    若 symbols_source 回空 list，則該輪 skip（避免掃全市場誤觸發）。
+    """
 
     def __init__(
         self,
@@ -38,12 +47,14 @@ class ScannerEngine:
         *,
         interval_seconds: int = SCAN_INTERVAL_SECONDS,
         market_hours_only: bool = True,
+        symbols_source: SymbolsSource | None = None,
     ) -> None:
         self.symbols = symbols
         self.fetch = fetch
         self.on_signal = on_signal
         self.interval = interval_seconds
         self.market_hours_only = market_hours_only
+        self.symbols_source = symbols_source
 
         self._active: dict[str, SetupSignal] = {}        # dedup_key -> signal
         self._dedup_ts: dict[str, datetime] = {}
@@ -97,8 +108,22 @@ class ScannerEngine:
         for q in dead:
             self.unsubscribe(q)
 
+    def _current_symbols(self) -> list[str]:
+        """每輪取「現在該掃哪些 symbol」。動態 source 優先。"""
+        if self.symbols_source is not None:
+            try:
+                dyn = list(self.symbols_source())
+                return dyn
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("symbols_source failed, fallback to static: %s", exc)
+        return list(self.symbols)
+
     async def _loop(self) -> None:
-        logger.info("scanner loop started: %d symbols, %ds interval", len(self.symbols), self.interval)
+        mode = "dynamic" if self.symbols_source else "static"
+        logger.info(
+            "scanner loop started: %s mode, init=%d symbols, %ds interval",
+            mode, len(self.symbols), self.interval,
+        )
         while not self._stop.is_set():
             try:
                 if not self.market_hours_only or is_market_open(datetime.now()):
@@ -136,8 +161,12 @@ class ScannerEngine:
 
     async def _scan_once(self) -> None:
         async with self._lock:
+            symbols = self._current_symbols()
+            if not symbols:
+                logger.debug("scan skipped: empty symbol set (watchlist 空？)")
+                return
             results = await asyncio.gather(
-                *(self._scan_one(s) for s in self.symbols), return_exceptions=False
+                *(self._scan_one(s) for s in symbols), return_exceptions=False
             )
             now = datetime.now()
             for sig in results:
