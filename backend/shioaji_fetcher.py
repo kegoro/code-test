@@ -8,6 +8,7 @@ Public API is identical to finmind_fetcher so callers can swap without changes:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 import os
 import threading
@@ -89,13 +90,38 @@ async def warmup() -> bool:
 def reset_login() -> None:
     """Clear login state so the next call to _get_api() will retry.
 
-    Called by DataSourceRouter after the TTL cooldown has elapsed.
+    重要：每次只清 Python 端的 `_api = None` 會在 shioaji server 端留下殭屍
+    session，累積到單帳號連線額度上限就會回 451 「Too Many Connections」，
+    後續 login 全部失敗甚至引發 pysolace native crash（SIGSEGV）。
+    這裡先嘗試 `_api.logout()` 釋放 server 端連線，logout 失敗（已斷線）
+    也忽略，然後再清 Python 端狀態。
     """
     global _api, _logged_in
     with _login_lock:
+        old_api = _api
         _api = None
         _logged_in = False
+    if old_api is not None:
+        try:
+            old_api.logout()
+            logger.info("Shioaji logout OK before reset")
+        except Exception as exc:
+            logger.debug("Shioaji logout (best-effort) failed: %s", exc)
     logger.debug("Shioaji login state reset; will retry on next fetch")
+
+
+@atexit.register
+def _atexit_logout() -> None:
+    """Process 正常結束時 logout，避免留殭屍 session 把連線額度用完。"""
+    global _api
+    if _api is None:
+        return
+    try:
+        _api.logout()
+        logger.info("Shioaji logout at exit")
+    except Exception:
+        pass
+    _api = None
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -226,6 +252,52 @@ async def shioaji_fetch_m3(
     if df_1m.empty:
         return _empty_ohlcv()
     return _resample_3m(df_1m)
+
+
+async def shioaji_fetch_m1(symbol: str, days: int = 5) -> pd.DataFrame:
+    """Fetch 1-minute OHLCV across the most-recent `days` trading days.
+
+    Shioaji returns daily bars (not minute) when the kbars range spans more
+    than one day, so we fetch one day at a time and concatenate. Walks backward
+    from today, skipping weekends/holidays, until we have `days` non-empty
+    sessions or run out of look-back budget.
+    """
+    return await asyncio.to_thread(_sync_fetch_m1_multi, symbol, days)
+
+
+def _sync_fetch_m1_multi(symbol: str, days: int) -> pd.DataFrame:
+    """Walk backward day-by-day collecting 1-minute bars."""
+    api = _get_api()
+    contract = api.Contracts.Stocks[symbol]
+    if contract is None:
+        raise ValueError(f"no contract for symbol {symbol}")
+
+    frames: list[pd.DataFrame] = []
+    cursor: date = datetime.now().date()
+    sessions_collected = 0
+    safety_budget = days * 4 + 7  # tolerate holidays / long weekends
+
+    while sessions_collected < days and safety_budget > 0:
+        d_str = cursor.strftime("%Y-%m-%d")
+        try:
+            kbars = api.kbars(contract, start=d_str, end=d_str)
+            df = _kbars_to_df(kbars)
+            if not df.empty:
+                df = df[df.index.date == cursor]
+                if not df.empty:
+                    frames.append(df)
+                    sessions_collected += 1
+        except Exception as exc:
+            logger.warning("kbars(%s, %s) failed: %s", symbol, d_str, exc)
+        cursor = cursor - timedelta(days=1)
+        safety_budget -= 1
+
+    if not frames:
+        return _empty_ohlcv()
+
+    out = pd.concat(frames).sort_index()
+    out = out[~out.index.duplicated(keep="first")]
+    return out
 
 
 async def shioaji_fetch(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:

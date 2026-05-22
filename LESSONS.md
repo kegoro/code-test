@@ -4,8 +4,8 @@
 > Claude 每次開新對話前必須先讀這份檔案，避免重複踩坑、保留前後文。
 > 使用者要更新只要說：「把 OOO 記到 LESSONS.md」。
 
-**最後更新**：2026-05-16（深夜 — P0 + P1 全部完成，當沖系統第一版閉環）
-**對應 git commit**：c3a0500（aistockmap + watchlist + overnight + n_pattern + watcher + alert_state + brief script 尚未 commit）
+**最後更新**：2026-05-17（凌晨 — Crypto SMC 跨樣本驗證，發現 N-Pattern 是唯一可信 setup）
+**對應 git commit**：**04b5a38**（feat: 當沖系統第一版閉環）+ backtest 優化 + crypto 驗證未提交
 
 ---
 
@@ -173,6 +173,85 @@
 3. **不能套牢過夜**：當沖停損 1-2% 就走，套牢就違反當沖定義
 4. **Demand Block 破要立刻砍**：使用者原策略只講「DB 買進」沒講「DB 破停損」，必須補
 
+### 2.7.4b ⚠️ 進場前 4 條鐵則（2026-05-20 復盤後新增）
+
+**背景**：使用者 2026-05-20 一筆衝動進場（看「連續小紅 K 態勢」9:00-10:00 進、沒設停損）+ 套牢後同檔加碼凹單，兩筆都賠。診斷：**只下了「進場」決定，沒有「停損、目標、部位、若錯怎辦」** → 套牢時沒有預設答案、只能靠情緒決策。
+
+**按順序問自己、任一個答 No → 不進**：
+
+1. **是 bot 推的訊號嗎？**（N 字 watcher / OB watcher / DB approach）
+   → 沒推就不進。衝動看 K 線 = 跳過 N 字 Beat 2 = 接刀手版本。
+
+2. **進場前我有沒有「寫下來」停損價？**
+   → 沒寫就不進。不是「心裡想一下」，是真的打字寫出（Telegram 自己對自己送 / 紙條 / 備忘錄）。
+
+3. **從進場到停損會虧多少 %？**
+   → > 2% → 縮部位或不進。當沖一趟手續費+稅+滑價 ≈ 0.3%、賠 2% = 7 趟成本沒了。
+
+4. **今天已經第幾筆？**
+   → ≥ 3 筆收手、不管賺賠。對應 §2.7.4 #2「一天最多 3 筆」。第 4 筆永遠是報復性 / 強迫進場、永遠虧。
+
+**禁止行為（絕對不能）**：
+
+- ❌ 套牢加碼拔成本 — 「降低均價」= 部位變兩倍 = 風險變兩倍。所有當沖殺手共同死法
+- ❌ 違反停損價（凹單）— 「再等一下說不定反彈」= 損失迴避偏誤，永遠繼續賠
+- ❌ 同一檔反向（多空互轉）— 你今天看錯方向、不會 5 分鐘後就看對
+
+### 2.7.4c ⚠️ 風險預算 + FOMO 對抗（2026-05-20 復盤後新增）
+
+**使用者的金額標準**（2026-05-20 訪談確認）：
+- 資金 40 萬（30-50 萬區間）
+- 年最大虧損 8 萬（資金 20%）— **bright line、超過停玩**
+- 月期望賺 1-3 萬 — **數學上 OK** 但需嚴格執行（勝率 45% + R:R 1:1.5 + 紀律執行率 95%+）
+- 單筆風險上限 4,000 元（資金 1%）
+- 日損失上限 8,000 元（資金 2%）— **賠到當天收工**
+
+**FOMO 對抗 3 機制**：
+1. 開盤前 15 分鐘 bot 推「⛔ 9:00-9:15 禁止交易、等 N 字 watcher 推送」
+2. 看到衝高選擇不進時、Telegram 紙上記錄「YYYY-MM-DD HH:MM <symbol> 想進、選擇不進」— 把「不進」變成一個明確決定
+3. 拒絕全市場掃描誘惑、每天只看 watchlist（≤ 5 檔）
+
+**今天事件（2026-05-20）**：
+- 5 筆交易（超過 §2.7.4 #2 的 3 筆硬規則 67%）
+- 第 1 筆 3481 × 3 張 @39（接近最高）— bot 推「別追高」**使用者無視**
+- 第 2 筆 2344 華邦電 @118.5 → 114 = -4,763（-4.02%）「無腦進」
+- 後續 3 筆：「Telegram 抓不到資料、無邏輯」← bot 故障期間繼續硬幹
+- **最致命診斷**：紀律寄託在 bot 上、bot 故障 = 失控 → 系統「外包紀律」而沒「內化紀律」
+
+### 2.7.5 ⭐ 紙上模擬期（2026-05-20 → 至少 2026-06-20）
+
+**狀態**：實盤暫停、只做 Telegram 紙上模擬。
+
+**規則**：
+| 項目 | 內容 |
+|---|---|
+| 資金 | 虛擬 40 萬（跟真實一致） |
+| 訊號來源 | **只接受** N 字 watcher / OB watcher / DB approach 推送 |
+| 進場流程 | Telegram `/sim_open <symbol> long entry=X stop=Y target=Z size=N` |
+| Bot 自動監控 | 觸停損/停利時推「✅ 模擬贏 +XXX / 💀 模擬輸 -XXX」 |
+| 每日上限 | 3 筆模擬部位、超過 bot 拒絕受理 |
+| 月底成績單 | 總筆數 / 勝率 / 平均 R:R / 期望值 / 紀律執行率 |
+| **復實盤條件**（必須同時）| 勝率 ≥ 50% + 期望值 > 0 + 紀律執行率 ≥ 95% |
+| 沒達標 | 繼續紙上模擬另一個月、檢討規則本身 |
+
+**已完成（2026-05-20 深夜實作）**：
+- [x] `backend/sim_book.py` — 紙上模擬部位簿 + 紀律守門（R:R/單筆風險/日筆數/方向）
+- [x] `backend/sim_monitor.py` — cron 每 3 分鐘對 active 部位拉 m3 last close、觸 stop/target 自動結算 + 推 Telegram
+- [x] `backend/sim_suggester.py` — **auto 模式**：使用者只給 symbol+direction+entry+size，bot 根據 Bull/Bear OB + ATR 自動算建議 stop/target（R:R 預設 2.0）
+- [x] Telegram 指令 `/sim_open` `/sim_close` `/sim_status` `/sim_report`
+- [x] Telegram menu 清理（2026-05-20 使用者要求）：只放「無參數可直接執行」的指令，需要參數的（/sim_open /sim_close /ai_analyse /wl_add 等）從 menu 移除、手動打避免誤觸
+
+**還沒做（P1）**：
+- [ ] 開盤前 15 分鐘 cron 推「禁止交易、等 N 字 watcher」提醒
+- [ ] 復實盤條件達標時自動推「✅ 達標、可考慮回實盤」
+
+### 2.7.6 已刪除的舊指令（2026-05-20）
+
+舊版 in-memory watchlist 系統（`/smc_watch` `/smc_unwatch` `/smc_list` `/smc_start` `/smc_stop`）已被持久化版本（`/wl` `/wl_add` `/wl_del` `/wl_clear` + 自動 cron）取代、5 個指令刪除：
+- 移除 5 個 cmd handler + 5 個 add_handler + `_bg_task` + `_push_signal`
+- code 少 ~70 行
+- `self.scanner` 保留給 `/smc_scan` 對單一股號跑結構分析用
+
 ### 2.7.5 決策已定（2026-05-16 晚間）
 
 - [x] **Q1 個股映射** ✅ 採 **A. 手動貼股號** — 使用者看完 aistockmap 後在 Telegram 用 `/wl_add 2330 2317` 加入，最快也最準
@@ -226,6 +305,99 @@
 
 ---
 
+## 2.8 ⭐ 2026-05-17 凌晨 — Crypto SMC 跨樣本驗證【最新】
+
+### 2.8.1 背景
+
+使用者問「能不能用 BTC papertrading 驗證策略」→ 跑 BTC/USDT 30 天 SMC 回測，結果 EV+0.33R 看似可行。但測試後續發現兩個關鍵問題，差點上 Testnet 賠錢。
+
+### 2.8.2 發現 A — Backtest vs Production 不一致 bug
+
+**症狀**：原 `backtest.py::_build_ctx_from_slice` 餵 detector 整段成長 slice（0 → t，最多 43200 根），但 production live pipeline (`context.py` `_LTF_DAYS_M1=5`) 只餵最近 5 天 (~1350 根)。
+
+**後果**：backtest 看到 production 永遠看不到的歷史，產生**假象正期望值**。修正後：
+
+| 版本 | Fires | WR | EV |
+|---|---|---|---|
+| 原 backtest (餵全 slice) | 381 | 13.8% | +0.33R ❌ 假象 |
+| 修正後 (對齊 production 1500 根) | 288 | 8.7% | -0.19R ✅ 真實 |
+
+**修法**：`backtest.py::_build_ctx_from_slice` 加 `_LTF_WINDOW=1500` / `_MTF_WINDOW=200`，daily 計算移出 loop 一次性算（`htf_cache`），MTF slice 改 numpy searchsorted。**附帶得到 53x 加速**（5.5h → 6.2min）。
+
+**教訓**：未來新增任何 backtest 工具必須跟 live pipeline 對齊歷史窗口長度。**Backtest 和 live 看到不同東西 = 評估完全失效**。
+
+### 2.8.3 發現 B — TF 是頭號變數（M1 完全沒用）
+
+跑 BTC/USDT M1/M5/M15/M30/1H 30 天對比：
+
+| TF | Fires | WR | EV | avgR:R |
+|---|---|---|---|---|
+| M1  | 288 | 8.7% | -0.19R | 32.00 |
+| M5  | 252 | 16.2% | -0.04R | 19.59 |
+| M15 | 104 | 28.6% | +0.47R | 6.10 |
+| M30 | 62 | 32.1% | +0.27R | 5.61 |
+| 1H  | 28 | 28.6% | +0.06R | 3.41 |
+
+**觀察**：
+- M1/M5 噪音太大吃掉 ATR 停損（avgR:R 19-32 = 停損 < 0.05%，crypto 1m bar 一定碰到）
+- M15 是 noise vs sample 黃金交叉
+- M30/1H fires 太少，整體 EV 下來
+
+### 2.8.4 發現 C ⚠️ — 30 天 backtest 嚴重不可信（最大教訓）
+
+M15 跨樣本驗證：
+
+| 樣本 | Fires | WR | EV |
+|---|---|---|---|
+| M15 30d | 104 | 28.6% | **+0.47R** ✅ 看似可行 |
+| M15 90d | 476 | 11.0% | **-0.34R** ❌ 真實 |
+| M15 180d | 714 | 17.1% | +0.44R（但 avgR:R=19.68 是假象）|
+
+**M15 30d EV+0.47R 是 sample bias**：4/17-5/17 BTC 在趨勢段，所有結構型 setup 都吃到甜頭。90 天涵蓋震盪期 → 全部壞掉。
+
+**教訓**：
+- **絕不能用 30 天樣本決定要不要上線**，至少 90 天，最好 180 天
+- 180d EV+0.44R 看似回到 30d 水準，但仔細看是 avgR:R 19.68 的數學魔術（38 個贏家 × 15R 抵 155 個輸家 × 1R）— **不是真實邊際**（延伸 §3.5）
+
+### 2.8.5 發現 D ✅ — N-Pattern 是 BTC 上唯一跨樣本穩定的 setup
+
+| Setup | 30d | 90d | 180d | 結論 |
+|---|---|---|---|---|
+| Trendline Break | 44%/+2.30R | 19%/+0.27R | 20%/+0.14R | 30d 騙人 |
+| OB Retest | 33%/+0.63R | 11%/-0.26R | 20%/+1.86R | 不一致 |
+| Mitigation | 26%/+0.37R | 7%/-0.47R | 11%/-0.44R | 沒邊際 |
+| Breaker | 18%/+0.10R | 7%/-0.55R | 12%/-0.23R | 沒邊際 |
+| Unicorn | 30%/-0.10R | 10%/-0.58R | 20%/-0.28R | 沒邊際 |
+| FVG @ HTF | 0% | 0% | 0% | 死設定 |
+| **N-Pattern** | n=1 W1 | **67%/+1.28R** | **50%/+0.69R** | **唯一可信** ✅ |
+
+N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SESSION_WINDOW_HOURS=4.0` 改成 4 小時 rolling window，跨上 crypto 24/7 仍有效。180 天 28 fires = 約 1 次/週，慢但可信。
+
+**Gate 判斷**：N-Pattern 90d WR=66.7% > 45%，**第一次有 setup 過 Gate**。但要先驗證 ETH/SOL/BNB 不是 BTC 特例（同時跑中）。
+
+### 2.8.6 發現 E — Setup bugs（暫不修，先用 N-Pattern only）
+
+**OB Retest stop placement bug**（`ob_continuation.py:134-139`）：
+- Line 134: `entry = ob["top"]`（long 用 OB 頂部當進場）
+- Line 135-136: 偵測到 FVG 時 `entry = FVG 中點`
+- Line 139: `stop = ob["bottom"] - buffer`
+- **若 FVG 中點落在 OB 下方** → entry < stop on long → 即時觸發 stop
+- 證據：M1 backtest OB Retest 6 次失敗，4 次 stop < entry 距離 < 0.02%
+
+**Trendline Break long bias**（M1 backtest）：208 次觸發**全 long**，沒一次 short — 結構偵測或 BOS 邏輯可能有方向偏誤。
+
+**處置**：因 N-Pattern 已足夠且 setup 本身就被 §2.8.5 證明不可信，這兩個 bug 留作技術債，不優先修。
+
+### 2.8.7 決策
+
+- [x] **不上 Testnet**（30d 數字是假象，差點賠錢）
+- [x] **Backtest 對齊 production**（已修，待 commit）
+- [ ] **驗證 N-Pattern 在 ETH/SOL/BNB**（跑中）
+- [ ] **如 N-Pattern 跨幣種穩定** → 寫「N-Pattern only crypto bot」規格 → 再上 Testnet
+- [ ] **如 N-Pattern 只在 BTC 有效** → 縮小範圍只跑 BTC
+
+---
+
 ## 3. 踩過的坑（不要再犯）
 
 ### 3.1 FinMind 免費 tier 不支援分鐘級 K
@@ -261,14 +433,39 @@
 ### 3.5 avg R:R 過高反而是停損過遠的警訊（不是越大越好）
 - **2308**：R:R 29.43 但勝率 25.2%
 - **2382 OB Retest**：R:R 22.12 但勝率 12.7%
-- **道理**：R:R > 10 通常代表停損點離進場太遠，每次贏雖然抵很多次輸，但勝率支撐不住
-- **行動**：把 R:R > 10 的訊號當作「進場品質有問題」來檢視，不是當作好訊號
+- **BTC M1 全 7 setup**：avgR:R 32.00 整體 WR 13.8%（§2.8.3）
+- **BTC M15 180d 整體**：avgR:R 19.68 看似 EV+0.44R 但 WR 只 17.1%（§2.8.4）
+- **道理**：R:R > 10 通常代表停損點離進場太遠（或更糟，**stop 跟 entry 重疊**），每次贏雖然抵很多次輸，但勝率支撐不住
+- **新發現（2026-05-17）**：在 crypto 上，R:R > 10 不只是「停損過遠」還可能是「停損和進場錯位」— 例：OB Retest 偵測到 FVG 時 entry 改成 FVG 中點，但 stop 仍錨定 OB 底，若 FVG 中點落在 OB 下方則 stop > entry on long → 即時 loss（§2.8.6）
+- **行動**：把 R:R > 10 的訊號當作「進場品質有問題」來檢視，不是當作好訊號。整體 backtest 看到 avgR:R > 10 時要懷疑「正 EV 是不是數學魔術」
 
 ### 3.6 回測 open（未結算）比例過高 → 評估失準
 - **2330**：18/49 = 37% 未結算
 - **2308**：54/209 = 26% 未結算
 - **問題**：未結算單沒算進勝率，數字會樂觀
 - **行動**：拉長回測週期，或強制以最後一根 K 線收盤價了結未結算單
+
+### 3.7 ⚠️ Telegram bot 把 raw exception 推給使用者會洩漏 secret【2026-05-20 安全事件】
+- **情況**：`cmd_scan` 對 shioaji exception 用 `f"日線拉失敗（{exc}）"` 直接推到 Telegram
+- **問題**：shioaji exception 把 request payload 完整 dump，含 **完整 JWT token + person_id + IP + PYAPI client string**
+- **後果**：token 留在 Telegram 雲端 + 截圖貼到外部對話 → 12 小時內外洩
+- **這次運氣**：洩漏的 key 只有 `permissions: ["Data"]`，不能下單；但若是含「交易」權限的 key 就完蛋
+- **修補**（commit 2026-05-20）：
+  - `backend/smc_bot.py::_safe_err()`：所有 cmd handler 推 exception 前先過濾 JWT / API key / `'token': ...` / PYAPI client / 身分證號（[A-Z]\d{9}）/ 長 base64
+  - 5 處 cmd handler 改用 `_safe_err()`：cmd_scan / cmd_aistockmap / cmd_analyst_scan / cmd_ai_analyse / cmd_overnight_check
+- **教訓**：**永遠不要把 raw exception 直接送 Telegram / Web / 任何公開介面**。三方 lib（shioaji / FinMind / pysolace）的 exception 經常把 request payload 整段塞進 message，無法控制 lib 端 logger
+- **永久措施**：新 cmd handler 一律用 `_safe_err(exc)` 包過 exception；任何要送 Telegram 的字串都過 `_sanitize_for_telegram()`
+
+### 3.8 ⚠️ Shioaji reset_login 必須先 api.logout()，否則累積 451 + native SIGSEGV【2026-05-20】
+- **症狀**：bot 跑 19 分鐘到 5 小時不等，會出現 `status_code: 451 Too Many Connections.`，之後 shioaji native lib `pysolace` 進入「Not ready」狀態反覆 retry → SIGSEGV (exit 139)
+- **根因**：原本 `reset_login()` 只清 Python 端 `_api = None`，shioaji server 那邊還記得這條 session 佔著連線額度
+- **累積路徑**：每次 token 過期 → reset_login → 又留一條殭屍 session；多次後撞單帳號連線上限
+- **加上跑 demo script**（`demo_ai_report_real` / `screenshot_*` 等）也會各自建 session 不 logout，更快累積
+- **修補**（commit 2026-05-20）：
+  - `backend/shioaji_fetcher.py::reset_login()`：先 best-effort `old_api.logout()`，再清 `_api = None`
+  - 加 `@atexit.register` 確保 process 正常結束時 logout
+- **教訓**：lib 釋放資源時，**Python 端清狀態 ≠ server 端清連線**。任何「自動 retry + 累積式」的 lib 都要顯式呼叫 logout / close / disconnect
+- **未做**：SIGSEGV 是 native crash，atexit / Python signal handler 都接不到 → 未來加 process supervisor（subprocess watchdog 或 Windows scheduled task auto-restart）
 
 ---
 
@@ -290,8 +487,11 @@
 | 項目 | 內容 |
 |------|------|
 | 即時資料源 | Shioaji（M3 真實，09:00–13:35 盤中掃描） |
+| Crypto 資料源 | Binance public OHLCV via ccxt（`backend/crypto_data.py`，無需 API key） |
 | 日線資料源 | FinMind（免費 tier 可用，分鐘線需付費） |
-| 回測腳本 | `run_30day_backtest.py` |
+| 回測腳本 (TWSE) | `run_30day_backtest.py` |
+| 回測腳本 (Crypto) | `run_btc_backtest.py` / `scripts/run_btc_mtf.py`（後者支援 5m/15m/30m/1h） |
+| Crypto backtest 速度 | 53x 加速後，30 天 1m = 6 分鐘；180 天 15m = 21 分鐘 |
 | 回測輸出 | `reports/smc_backtest_<symbol>_summary.txt` + `.csv` |
 | SMC pipeline | `backend/smc_analyst/setups/*.py`（純函式） |
 | HTML 報告 | `backend/smc_report.py` |
@@ -306,10 +506,16 @@
 | 隔日沖偵測（簡化版） | `backend/overnight_holders.py`（門檻：前日 >5% + 今開 >2%） |
 | N 字 setup | `backend/smc_analyst/setups/n_pattern.py`（M3，Beat 1/2/3 + DB） |
 | N 字先行警示 | `backend/n_pattern_watcher.py`（first_beat + db_approach，pre-trigger） |
+| OB 形成警示 | `backend/ob_watcher.py`（最後 6 根 LTF 內新形成的 Bull/Bear OB → Telegram） |
 | 警示去重 | `backend/alert_state.py` → `data/alert_state.json`（持久化 dedup） |
+| AI 趨勢分析報告 | `backend/ai_analysis_*.py` + `scripts/demo_ai_report*.py`（5 維度評分 + 雙 K 線 + 可展開明細） |
+| AI 評分 5 維度 | 籌碼 45%（FinMind 三大法人）/ 技術 35%（SMC 7-setup）/ 新聞 20%（aistockmap）/ 基本面、題材面 = 參考 |
 | 盤前簡報 script | `scripts/aistockmap_brief.py --slot=morning\|evening`（獨立進程，配 schtasks） |
-| Telegram 指令 | `/aistockmap` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` |
-| Telegram 自動 cron | bot 啟動即排 `JobQueue.run_repeating(180s)` 跑 watcher（盤中才動作） |
+| Telegram 指令 | `/aistockmap` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` / `/ai_analyse` / `/smc_scan` |
+| Telegram 自動 cron | bot 啟動即排 `JobQueue.run_repeating(180s)` 跑 N 字 + OB watcher（盤中才動作） |
+| Telegram bot token | **兩組分開**：`SMC_TELEGRAM_BOT_TOKEN`（這套 smc_bot 專用）+ `TELEGRAM_BOT_TOKEN`（給 `tw-stock-signal/main.py --daemon` 用），同 token 會 409 Conflict |
+| Telegram 安全濾鏡 | `backend/smc_bot.py::_safe_err()` + `_sanitize_for_telegram()` — 所有 exception 推 Telegram 前過濾 JWT/API key/身分證/PYAPI client（§3.7） |
+| Shioaji session 管理 | `reset_login()` 先 `api.logout()` 再清 Python 端 + atexit hook（§3.8 防 451/SIGSEGV） |
 | 探勘工具（保留備用）| `scripts/probe_aistockmap.py` / `probe_focus_dom.py` |
 
 ---
@@ -318,9 +524,10 @@
 
 **Claude 行為**：
 1. 每次新對話開始前先 Read 這個檔案
-2. 完成回測 / 修策略 / 踩坑後，**主動**問使用者要不要更新
+2. 完成回測 / 修策略 / 踩坑後，**直接更新**（使用者 2026-05-20 明示「以後不用問我了，想記就記」）
 3. 不要把這份檔案塞滿瑣碎細節，只記**會影響下次決策**的事
 4. 章節編號穩定，新內容優先放在「第 2 節 最新決策」下面用日期區隔
+5. 更新後在回覆中提一句「已記入 LESSONS §X.Y」即可，不要長篇解釋
 
 **使用者操作**：
 - 「把 XX 記到 LESSONS.md」→ Claude 直接 Edit

@@ -31,7 +31,6 @@ from typing import Optional
 
 import pandas as pd
 
-from backend.shioaji_fetcher import shioaji_fetch_daily, shioaji_fetch_m1
 from backend.smc_analyst.context import AnalysisContext, Frame, _atr, _build_liquidity_map
 from backend.smc_analyst.setups import ALL_SETUPS
 from backend.smc_analyst.setups.base import SetupMatch, passes_hard_gates
@@ -114,22 +113,50 @@ class BacktestReport:
 
 # ── synthetic context for a bar slice ────────────────────────────────────────
 
+# Match live pipeline window sizes (context.py _LTF_DAYS_M1 = 5 days ≈ 1350 bars).
+# Feeding detectors a 5-day window is consistent with production behavior and
+# turns per-step cost from O(t) to O(constant).
+_LTF_WINDOW = 1500
+_MTF_WINDOW = 200
+
+
 def _build_ctx_from_slice(
     symbol: str,
     ltf_slice: pd.DataFrame,
     daily_df: pd.DataFrame,
     mtf_slice: pd.DataFrame,
+    *,
+    htf_cache: Optional[dict] = None,
 ) -> AnalysisContext:
-    """Build an AnalysisContext from pre-sliced frames (for replay)."""
-    htf_struct = detect_market_structure(daily_df, n=5) if not daily_df.empty else \
-        {"structure": "ranging", "swing_points": {"swing_highs": [], "swing_lows": []},
-         "last_bos": None, "last_choch": None}
+    """Build an AnalysisContext from pre-sliced frames (for replay).
+
+    `htf_cache` (optional) pre-computed daily-level values from a single call
+    outside the replay loop: {"struct": dict, "atr": float, "mtf_levels": dict}.
+    """
+    # Truncate to match live pipeline windows — detectors only look at recent
+    # structure (last 14-30 bars for OB/ATR/trendline, last 2 swings for trend).
+    if len(ltf_slice) > _LTF_WINDOW:
+        ltf_slice = ltf_slice.iloc[-_LTF_WINDOW:]
+    if len(mtf_slice) > _MTF_WINDOW:
+        mtf_slice = mtf_slice.iloc[-_MTF_WINDOW:]
+
+    if htf_cache is not None:
+        htf_struct = htf_cache["struct"]
+        htf_atr = htf_cache["atr"]
+        mtf_levels = htf_cache["mtf_levels"]
+    else:
+        htf_struct = detect_market_structure(daily_df, n=5) if not daily_df.empty else \
+            {"structure": "ranging", "swing_points": {"swing_highs": [], "swing_lows": []},
+             "last_bos": None, "last_choch": None}
+        htf_atr = _atr(daily_df, 14)
+        mtf_levels = compute_mtf_levels(daily_df)
+
     mtf_struct = detect_market_structure(mtf_slice, n=5) if not mtf_slice.empty else \
         {"structure": "ranging", "swing_points": {"swing_highs": [], "swing_lows": []},
          "last_bos": None, "last_choch": None}
     ltf_struct = detect_market_structure(ltf_slice, n=10)
 
-    htf = Frame("1D", daily_df, 5, htf_struct, atr=_atr(daily_df, 14))
+    htf = Frame("1D", daily_df, 5, htf_struct, atr=htf_atr)
     mtf = Frame("60m", mtf_slice, 5, mtf_struct, atr=_atr(mtf_slice, 14))
     ltf = Frame("1m", ltf_slice, 10, ltf_struct, atr=_atr(ltf_slice, 14))
 
@@ -140,7 +167,6 @@ def _build_ctx_from_slice(
     fvgs = [f for f in find_fair_value_gaps(ltf_slice) if f["valid"]]
     tl = compute_trendlines(ltf_slice, length=14) if len(ltf_slice) > 30 else None
     pd_zones = compute_premium_discount(sp_ltf, ltf_slice)
-    mtf_levels = compute_mtf_levels(daily_df)
     liquidity = _build_liquidity_map(ltf, mtf_levels=mtf_levels, equal_pivots=eq)
 
     # Reuse a "trend_morning" phase so session_bonus stays positive in replay
@@ -197,20 +223,46 @@ async def backtest_symbol(
     step: int = 5,
     min_history_bars: int = 240,
     daily_lookback: int = 120,
+    fetch_m1=None,
+    fetch_daily=None,
 ) -> BacktestReport:
     """Run the backtest. `step` = how often to re-evaluate (bars). Smaller =
-    more thorough but slower."""
+    more thorough but slower.
+
+    `fetch_m1` / `fetch_daily` allow swapping the data source (e.g. crypto via
+    ccxt). Default = shioaji_fetcher for TWSE.
+    """
+    if fetch_m1 is None or fetch_daily is None:
+        from backend.shioaji_fetcher import shioaji_fetch_daily, shioaji_fetch_m1
+        fetch_m1 = fetch_m1 or shioaji_fetch_m1
+        fetch_daily = fetch_daily or shioaji_fetch_daily
+
     logger.info("Fetching %s history (1m × %d days)…", symbol, days)
-    full_m1 = await shioaji_fetch_m1(symbol, days=days)
+    full_m1 = await fetch_m1(symbol, days=days)
     if full_m1 is None or full_m1.empty:
         return BacktestReport(symbol=symbol, bars_total=0, bars_evaluated=0)
 
-    daily_df = await shioaji_fetch_daily(symbol, lookback=daily_lookback)
+    daily_df = await fetch_daily(symbol, lookback=daily_lookback)
     full_mtf = (
         full_m1.resample("60min")
         .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
         .dropna(subset=["open"])
     )
+
+    # Daily-derived values never change during replay — compute once.
+    htf_cache = {
+        "struct": (detect_market_structure(daily_df, n=5) if not daily_df.empty
+                   else {"structure": "ranging",
+                         "swing_points": {"swing_highs": [], "swing_lows": []},
+                         "last_bos": None, "last_choch": None}),
+        "atr": _atr(daily_df, 14),
+        "mtf_levels": compute_mtf_levels(daily_df),
+    }
+
+    # numpy-backed index for O(log n) MTF slicing instead of pandas .loc.
+    import numpy as _np
+    mtf_index_arr = full_mtf.index.to_numpy()
+    ltf_index_arr = full_m1.index.to_numpy()
 
     n = len(full_m1)
     report = BacktestReport(symbol=symbol, bars_total=n, bars_evaluated=0)
@@ -222,11 +274,18 @@ async def backtest_symbol(
     last_log_bar = -1
     for t in range(min_history_bars, n, step):
         report.bars_evaluated += 1
-        ltf_slice = full_m1.iloc[:t + 1]
-        mtf_cutoff = ltf_slice.index[-1]
-        mtf_slice = full_mtf.loc[full_mtf.index <= mtf_cutoff]
+        # LTF slice — only need last _LTF_WINDOW bars (context builder will
+        # truncate anyway, but doing it here saves the slice cost too).
+        ltf_lo = max(0, t + 1 - _LTF_WINDOW)
+        ltf_slice = full_m1.iloc[ltf_lo : t + 1]
+        mtf_cutoff = ltf_index_arr[t]
+        mtf_hi = int(_np.searchsorted(mtf_index_arr, mtf_cutoff, side="right"))
+        mtf_lo = max(0, mtf_hi - _MTF_WINDOW)
+        mtf_slice = full_mtf.iloc[mtf_lo:mtf_hi]
         try:
-            ctx = _build_ctx_from_slice(symbol, ltf_slice, daily_df, mtf_slice)
+            ctx = _build_ctx_from_slice(
+                symbol, ltf_slice, daily_df, mtf_slice, htf_cache=htf_cache,
+            )
         except Exception:
             logger.exception("context build failed at bar %d", t)
             continue

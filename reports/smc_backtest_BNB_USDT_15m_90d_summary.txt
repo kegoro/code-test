@@ -1,0 +1,21 @@
+SMC Analyst — Backtest Report
+  symbol            : BNB_USDT_15m_90d
+  total bars        : 8641
+  bars evaluated    : 8401
+  signals fired     : 394
+  wins              : 108
+  losses            : 280
+  open (unresolved) : 6
+  win rate (resolved): 27.8%
+  avg R:R           : 25.88
+  expectancy (R/signal): +0.98
+
+By setup:
+  Breaker Block                       fires=116  W22 L93 O1  wr= 19.1%  avgR:R=61.29
+  OB Retest Continuation              fires=113  W37 L75 O1  wr= 33.0%  avgR:R=15.26
+  Unicorn (Breaker × FVG)             fires= 38  W9 L28 O1  wr= 24.3%  avgR:R=8.53
+  Mitigation Block                    fires= 72  W18 L53 O1  wr= 25.4%  avgR:R=7.83
+  Trendline Break + Shift             fires= 28  W12 L14 O2  wr= 46.2%  avgR:R=6.59
+  N-Pattern Day Trade                 fires=  2  W2 L0 O0  wr=100.0%  avgR:R=2.97
+  FVG Fill @ HTF Zone                 fires=  3  W2 L1 O0  wr= 66.7%  avgR:R=3.72
+  Liquidity-Sweep Reversal            fires= 22  W6 L16 O0  wr= 27.3%  avgR:R=12.48

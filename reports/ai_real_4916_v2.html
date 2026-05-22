@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 趨勢分析｜事欣科（4916）</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #f5f7fb;
+    --card: #ffffff;
+    --border: #e6eaf0;
+    --text: #1f2937;
+    --muted: #94a3b8;
+    --sub: #64748b;
+    --accent: #2563eb;
+    --accent-soft: #eff5ff;
+    --orange: #f59e0b;
+    --orange-soft: #fef3c7;
+    --bull: #ef4444;
+    --bull-soft: #fee2e2;
+    --bear: #10b981;
+    --bear-soft: #d1fae5;
+    --bar-bg: #f1f5f9;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    font-size: 14px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+
+  /* ── Header ────────────────────────────────────────────────── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header-left { display: flex; align-items: flex-start; gap: 12px; }
+  .header-bar {
+    width: 4px; align-self: stretch; min-height: 38px;
+    background: var(--accent); border-radius: 2px; margin-top: 2px;
+  }
+  .header-title {
+    font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.4;
+  }
+  .header-stock {
+    font-size: 18px; font-weight: 700; margin-top: 2px;
+  }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .quota-chip {
+    background: #f8fafc; border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px;
+    font-size: 12px; color: var(--sub);
+  }
+  .quota-chip b { color: var(--accent); font-weight: 700; margin: 0 2px; }
+  .close-btn {
+    width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; color: var(--muted); cursor: pointer;
+    user-select: none; font-size: 18px;
+  }
+  .close-btn:hover { background: #f1f5f9; color: var(--text); }
+
+  /* ── Tabs ──────────────────────────────────────────────────── */
+  .tabs {
+    display: flex; gap: 4px; padding: 12px 16px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    flex: 1; text-align: center;
+    padding: 12px 8px; border-radius: 10px 10px 0 0;
+    font-size: 14px; color: var(--sub); cursor: pointer;
+    border: 1px solid transparent; border-bottom: none;
+    transition: background .15s, color .15s;
+  }
+  .tab .ic { margin-right: 6px; }
+  .tab.active {
+    background: var(--orange); color: white; font-weight: 600;
+  }
+  .tab:not(.active):hover { background: #f8fafc; color: var(--text); }
+
+  .subtabs {
+    display: flex; gap: 24px;
+    padding: 14px 22px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .subtab {
+    padding: 8px 0 12px; cursor: pointer;
+    color: var(--sub); font-size: 14px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .subtab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .meta-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 22px; background: var(--accent-soft);
+  }
+  .meta-text { font-size: 12px; color: var(--sub); }
+  .meta-text b { color: var(--text); }
+  .reanalyse-btn {
+    background: var(--accent); color: white;
+    border: none; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, .25);
+  }
+
+  /* ── Body ──────────────────────────────────────────────────── */
+  .body { padding: 18px 22px 22px; }
+  .pill {
+    display: inline-flex; align-items: center;
+    background: var(--orange-soft); color: var(--orange);
+    padding: 5px 12px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; margin-bottom: 12px;
+  }
+  .pill .ic { margin-right: 4px; }
+
+  .score-card {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 22px;
+  }
+  .score-card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .score-card-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14px; color: var(--text); font-weight: 600;
+  }
+  .verdict-chip {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 3px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+    background: var(--bull-soft); color: var(--bull);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  .verdict-chip.is-bear { background: var(--bear-soft); color: var(--bear);
+    border-color: rgba(16, 185, 129, 0.3); }
+  .verdict-chip.is-neutral { background: #f1f5f9; color: var(--sub);
+    border-color: var(--border); }
+  .score-card-total {
+    font-size: 30px; font-weight: 700; color: var(--bull);
+  }
+  .score-card-total.is-bear { color: var(--bear); }
+  .score-card-total.is-neutral { color: var(--text); }
+  .score-card-total .max {
+    font-size: 16px; font-weight: 500; color: var(--muted);
+  }
+
+  .dim { border-radius: 8px; transition: background .15s; }
+  .dim:hover .dim-row { background: rgba(0,0,0,0.025); }
+  .dim.is-reference { opacity: 0.55; }
+  .dim-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 60px 50px;
+    align-items: center;
+    gap: 12px; padding: 8px 6px;
+    cursor: pointer; user-select: none;
+    border-radius: 6px;
+  }
+  .dim-label {
+    font-size: 13px; color: var(--text);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .dim-toggle {
+    display: inline-block; font-size: 9px; color: var(--muted);
+    transition: transform .2s ease;
+  }
+  .dim.expanded .dim-toggle { transform: rotate(180deg); }
+  .dim-bar {
+    height: 8px; background: var(--bar-bg); border-radius: 999px; overflow: hidden;
+  }
+  .dim-fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
+  .dim-fill-bull { background: linear-gradient(90deg, #f87171, #ef4444); }
+  .dim-fill-bear { background: linear-gradient(90deg, #34d399, #10b981); }
+  .dim-fill-neutral { background: linear-gradient(90deg, #94a3b8, #64748b); }
+  .dim.is-reference .dim-fill {
+    background: linear-gradient(90deg, #fecaca, #fca5a5);
+  }
+  .dim-score { font-size: 13px; font-weight: 700; color: var(--text); text-align: right; }
+  .dim.is-reference .dim-score { color: var(--bull); font-weight: 600; }
+  .dim-weight { font-size: 12px; color: var(--muted); text-align: right; }
+
+  .dim-detail {
+    max-height: 0; overflow: hidden;
+    transition: max-height .3s ease, padding .3s ease, margin .3s ease;
+    background: var(--bar-bg); border-radius: 8px;
+    padding: 0 14px; margin: 0;
+  }
+  .dim.expanded .dim-detail {
+    max-height: 320px;
+    padding: 10px 14px 12px;
+    margin: 4px 0 8px;
+  }
+  .dim-detail table { width: 100%; border-collapse: collapse; }
+  .dim-detail td { padding: 5px 6px; font-size: 12px; vertical-align: middle; }
+  .dim-detail tr + tr td { border-top: 1px solid rgba(0,0,0,0.05); }
+  .dim-detail td:first-child  { color: var(--sub);  width: 45%; }
+  .dim-detail td:nth-child(2) { color: var(--text); font-weight: 600; text-align: right; width: 30%; }
+  .dim-detail td:nth-child(3) { color: var(--muted); font-size: 11px; text-align: right; width: 25%; }
+
+  /* ── Chart ─────────────────────────────────────────────────── */
+  .chart-card {
+    margin-top: 16px;
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .chart-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
+  }
+  .chart-title { font-size: 13px; color: var(--text); font-weight: 600; }
+  .chart-price-row {
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .chart-price { font-size: 18px; font-weight: 700; color: var(--bull); }
+  .chart-price.is-bear { color: var(--bear); }
+  .chart-pct { font-size: 13px; color: var(--bull); }
+  .chart-pct.is-bear { color: var(--bear); }
+  .chart-tf-switch {
+    display: flex; gap: 4px; margin-top: 2px;
+  }
+  .tf-btn {
+    background: transparent; color: var(--sub); cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; font-size: 12px;
+  }
+  .tf-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .tf-btn:not(.active):hover { background: #f8fafc; color: var(--text); }
+  #chart {
+    width: 100%; height: 340px; position: relative;
+  }
+  .chart-empty {
+    color: var(--muted); text-align: center; padding: 130px 0;
+    font-size: 13px; border: 1px dashed var(--border); border-radius: 6px;
+  }
+  .chart-meta {
+    display: flex; gap: 14px; margin-top: 6px;
+    font-size: 11px; color: var(--muted);
+  }
+  .chart-meta b { color: var(--sub); font-weight: 600; }
+
+  .footer {
+    margin-top: 14px; text-align: center;
+    font-size: 11px; color: var(--muted); line-height: 1.7;
+  }
+  @media (max-width: 600px) {
+    .wrap { padding: 8px; }
+    .header { padding: 14px 16px 10px; }
+    .header-stock { font-size: 16px; }
+    .body { padding: 14px 16px 18px; }
+    .score-card { padding: 14px 16px; }
+    .tab { font-size: 12px; padding: 10px 4px; }
+    .tab .ic { display: none; }
+    .dim-row { grid-template-columns: 56px 1fr 50px 40px; gap: 8px; }
+    #chart { height: 280px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <!-- Header -->
+      <div class="header">
+        <div class="header-left">
+          <div class="header-bar"></div>
+          <div>
+            <div class="header-title">AI 趨勢分析報告</div>
+            <div class="header-stock">事欣科 (4916)</div>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="quota-chip">今日剩餘 <b>3</b> 次</div>
+          <div class="close-btn" onclick="window.close();">✕</div>
+        </div>
+      </div>
+
+      <!-- Main tabs -->
+      <div class="tabs">
+        <div class="tab active" data-tab="recent"><span class="ic">⚡</span>近期觀察</div>
+        <div class="tab" data-tab="mid"><span class="ic">📈</span>中期展望</div>
+        <div class="tab" data-tab="full"><span class="ic">🔍</span>全面檢視</div>
+      </div>
+
+      <!-- Sub tabs -->
+      <div class="subtabs">
+        <div class="subtab active">最新報告</div>
+        <div class="subtab">歷史走勢</div>
+      </div>
+
+      <!-- Meta row -->
+      <div class="meta-row">
+        <div class="meta-text">
+          <b>剛剛</b>（05/19 00:57）的分析 · 可重新分析取得最新數據
+        </div>
+        <button class="reanalyse-btn">🔄 重新分析 (-1點)</button>
+      </div>
+
+      <!-- Body -->
+      <div class="body">
+        <div class="pill"><span class="ic">⚡</span>近期觀察分析</div>
+
+        <!-- Score Card -->
+        <div class="score-card">
+          <div class="score-card-head">
+            <div class="score-card-title">
+              AI 綜合評分
+              <span class="verdict-chip is-neutral">→ 中性</span>
+            </div>
+            <div class="score-card-total is-neutral">
+              62.3 <span class="max">/ 100</span>
+            </div>
+          </div>
+          
+      <div class="dim">
+        <div class="dim-row">
+          <div class="dim-label">籌碼面<span class="dim-toggle">▾</span></div>
+          <div class="dim-bar">
+            <div class="dim-fill dim-fill-neutral" style="width: 65.8%;"></div>
+          </div>
+          <div class="dim-score">65.8</div>
+          <div class="dim-weight">45%</div>
+        </div>
+        <div class="dim-detail"><table><tr><td>外資</td><td>+3,742,675 股</td><td>72 分</td></tr>
+<tr><td>投信</td><td>+0 股</td><td>50 分</td></tr>
+<tr><td>自營商</td><td>+1,081,547 股</td><td>67 分</td></tr></table></div>
+      </div>
+    
+      <div class="dim">
+        <div class="dim-row">
+          <div class="dim-label">技術面<span class="dim-toggle">▾</span></div>
+          <div class="dim-bar">
+            <div class="dim-fill dim-fill-neutral" style="width: 59.0%;"></div>
+          </div>
+          <div class="dim-score">59.0</div>
+          <div class="dim-weight">35%</div>
+        </div>
+        <div class="dim-detail"><table><tr><td>SMC Setup 最佳分數</td><td>14/40</td><td>no-setup</td></tr>
+<tr><td>HTF 趨勢方向</td><td>25/25</td><td>bullish</td></tr>
+<tr><td>LTF 結構動能</td><td>20/20</td><td>bullish</td></tr>
+<tr><td>Premium/Discount 位置</td><td>0/15</td><td>—</td></tr></table></div>
+      </div>
+    
+      <div class="dim">
+        <div class="dim-row">
+          <div class="dim-label">新聞面<span class="dim-toggle">▾</span></div>
+          <div class="dim-bar">
+            <div class="dim-fill dim-fill-neutral" style="width: 60.0%;"></div>
+          </div>
+          <div class="dim-score">60.0</div>
+          <div class="dim-weight">20%</div>
+        </div>
+        <div class="dim-detail"><table><tr><td>題材直接命中</td><td>0 次</td><td>股號或股名出現在新聞</td></tr>
+<tr><td>大盤新聞情緒</td><td>60 分</td><td>雷老闆 A/B 過濾通過率</td></tr>
+<tr><td>當日題材總數</td><td>6 條</td><td>aistockmap daily 焦點</td></tr></table></div>
+      </div>
+    
+      <div class="dim is-reference">
+        <div class="dim-row">
+          <div class="dim-label">基本面<span class="dim-toggle">▾</span></div>
+          <div class="dim-bar">
+            <div class="dim-fill dim-fill-neutral" style="width: 80.0%;"></div>
+          </div>
+          <div class="dim-score">80.0</div>
+          <div class="dim-weight">參考</div>
+        </div>
+        <div class="dim-detail"><table><tr><td>月營收 6 個月 YoY 平均</td><td>+35.3%</td><td>基礎分 75</td></tr>
+<tr><td>最新一季 EPS</td><td>+4.49 元</td><td>加分 +5.0</td></tr></table></div>
+      </div>
+    
+      <div class="dim is-reference">
+        <div class="dim-row">
+          <div class="dim-label">題材面<span class="dim-toggle">▾</span></div>
+          <div class="dim-bar">
+            <div class="dim-fill dim-fill-neutral" style="width: 51.0%;"></div>
+          </div>
+          <div class="dim-score">51.0</div>
+          <div class="dim-weight">參考</div>
+        </div>
+        <div class="dim-detail"><table><tr><td>標題嚴格命中</td><td>0 次</td><td>股號/股名出現在題材標題</td></tr>
+<tr><td>大盤題材熱度</td><td>51 分</td><td>題材數+cards+類別覆蓋</td></tr></table></div>
+      </div>
+    
+        </div>
+
+        <!-- Chart Card -->
+        <div class="chart-card">
+          <div class="chart-head">
+            <div>
+              <div class="chart-title" id="chart-title">日線走勢（近 3 個月）</div>
+              <div class="chart-tf-switch">
+                <button class="tf-btn active" data-tf="daily">日線 3M</button>
+                <button class="tf-btn" data-tf="m3">M3 盤中</button>
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <div class="chart-price-row" style="justify-content: flex-end;">
+                <span class="chart-price is-neutral" id="chart-price">74.40</span>
+                <span class="chart-pct is-neutral" id="chart-pct">+15.35%</span>
+              </div>
+              <div class="chart-meta" style="justify-content: flex-end;">
+                <span>Vol <b>8.4K</b></span>
+              </div>
+            </div>
+          </div>
+          <div id="chart"></div>
+        </div>
+
+        <div class="footer">
+          本報告為自動產生之技術分析訊號，僅供研究參考，不構成任何投資建議。<br>
+          盈虧自負，投資前請審慎評估自身風險承受能力。<br>
+          Generated at 2026-05-19 00:57:35 by ai_analysis_report.
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  // ── Data ────────────────────────────────────────────────────
+  var dailyData = [{"time": 1770076800, "open": 63.4, "high": 66.5, "low": 63.0, "close": 64.5}, {"time": 1770163200, "open": 64.6, "high": 67.4, "low": 63.5, "close": 66.8}, {"time": 1770249600, "open": 66.0, "high": 66.5, "low": 62.2, "close": 62.2}, {"time": 1770336000, "open": 61.5, "high": 61.6, "low": 58.0, "close": 59.8}, {"time": 1770595200, "open": 61.8, "high": 64.4, "low": 60.9, "close": 61.6}, {"time": 1770681600, "open": 63.0, "high": 63.4, "low": 60.3, "close": 63.3}, {"time": 1770768000, "open": 61.6, "high": 61.6, "low": 60.0, "close": 60.2}, {"time": 1771804800, "open": 61.4, "high": 64.6, "low": 61.0, "close": 63.7}, {"time": 1771891200, "open": 64.1, "high": 65.2, "low": 63.0, "close": 64.7}, {"time": 1771977600, "open": 65.1, "high": 65.5, "low": 63.3, "close": 63.6}, {"time": 1772064000, "open": 63.6, "high": 64.3, "low": 62.6, "close": 63.8}, {"time": 1772409600, "open": 65.0, "high": 66.0, "low": 62.6, "close": 63.5}, {"time": 1772496000, "open": 63.5, "high": 64.3, "low": 60.1, "close": 60.1}, {"time": 1772582400, "open": 59.4, "high": 61.1, "low": 56.2, "close": 57.2}, {"time": 1772668800, "open": 60.5, "high": 61.5, "low": 58.9, "close": 60.9}, {"time": 1772755200, "open": 61.3, "high": 63.0, "low": 60.6, "close": 61.3}, {"time": 1773014400, "open": 56.6, "high": 57.2, "low": 55.2, "close": 56.1}, {"time": 1773100800, "open": 58.0, "high": 58.8, "low": 57.3, "close": 57.8}, {"time": 1773187200, "open": 58.5, "high": 60.7, "low": 58.4, "close": 60.0}, {"time": 1773273600, "open": 60.0, "high": 63.4, "low": 59.5, "close": 61.1}, {"time": 1773360000, "open": 60.2, "high": 61.5, "low": 59.8, "close": 60.7}, {"time": 1773619200, "open": 60.7, "high": 61.1, "low": 59.5, "close": 59.7}, {"time": 1773705600, "open": 60.7, "high": 63.0, "low": 60.3, "close": 62.4}, {"time": 1773792000, "open": 63.3, "high": 64.0, "low": 61.0, "close": 61.8}, {"time": 1773878400, "open": 61.3, "high": 65.5, "low": 60.7, "close": 63.9}, {"time": 1773964800, "open": 64.1, "high": 64.9, "low": 61.3, "close": 61.5}, {"time": 1774224000, "open": 60.0, "high": 64.0, "low": 58.6, "close": 61.3}, {"time": 1774310400, "open": 62.9, "high": 62.9, "low": 59.2, "close": 59.8}, {"time": 1774396800, "open": 61.2, "high": 61.4, "low": 60.0, "close": 60.1}, {"time": 1774483200, "open": 60.9, "high": 62.2, "low": 57.8, "close": 57.8}, {"time": 1774569600, "open": 57.0, "high": 59.3, "low": 56.8, "close": 58.8}, {"time": 1774828800, "open": 58.0, "high": 61.4, "low": 57.6, "close": 58.8}, {"time": 1774915200, "open": 59.4, "high": 60.0, "low": 56.0, "close": 56.1}, {"time": 1775001600, "open": 58.0, "high": 58.3, "low": 56.7, "close": 57.4}, {"time": 1775088000, "open": 57.5, "high": 58.5, "low": 54.6, "close": 54.6}, {"time": 1775520000, "open": 55.1, "high": 55.8, "low": 53.2, "close": 54.3}, {"time": 1775606400, "open": 56.3, "high": 57.0, "low": 55.4, "close": 56.9}, {"time": 1775692800, "open": 57.5, "high": 57.5, "low": 55.3, "close": 55.7}, {"time": 1775779200, "open": 56.2, "high": 57.0, "low": 56.0, "close": 56.6}, {"time": 1776038400, "open": 55.9, "high": 58.4, "low": 55.9, "close": 58.0}, {"time": 1776124800, "open": 59.3, "high": 59.3, "low": 57.8, "close": 58.4}, {"time": 1776211200, "open": 59.1, "high": 60.8, "low": 58.7, "close": 60.3}, {"time": 1776297600, "open": 61.6, "high": 66.3, "low": 61.6, "close": 65.2}, {"time": 1776384000, "open": 67.0, "high": 68.9, "low": 66.4, "close": 67.8}, {"time": 1776643200, "open": 68.6, "high": 71.2, "low": 67.4, "close": 68.5}, {"time": 1776729600, "open": 67.5, "high": 70.3, "low": 66.6, "close": 67.2}, {"time": 1776816000, "open": 68.4, "high": 71.8, "low": 67.7, "close": 69.5}, {"time": 1776902400, "open": 70.7, "high": 70.7, "low": 62.6, "close": 66.1}, {"time": 1776988800, "open": 67.2, "high": 68.4, "low": 63.9, "close": 65.8}, {"time": 1777248000, "open": 66.4, "high": 66.7, "low": 60.4, "close": 62.4}, {"time": 1777334400, "open": 62.1, "high": 63.4, "low": 60.6, "close": 62.0}, {"time": 1777420800, "open": 61.5, "high": 63.0, "low": 61.4, "close": 62.5}, {"time": 1777507200, "open": 62.5, "high": 62.9, "low": 61.6, "close": 61.6}, {"time": 1777852800, "open": 62.0, "high": 64.5, "low": 61.9, "close": 63.3}, {"time": 1777939200, "open": 63.3, "high": 65.1, "low": 62.4, "close": 65.1}, {"time": 1778025600, "open": 66.0, "high": 66.0, "low": 62.6, "close": 63.3}, {"time": 1778112000, "open": 63.9, "high": 64.3, "low": 62.2, "close": 63.1}, {"time": 1778198400, "open": 63.6, "high": 66.0, "low": 61.7, "close": 62.0}, {"time": 1778457600, "open": 64.7, "high": 67.7, "low": 62.6, "close": 67.0}, {"time": 1778544000, "open": 67.9, "high": 69.5, "low": 66.9, "close": 68.4}, {"time": 1778630400, "open": 67.5, "high": 67.7, "low": 64.7, "close": 65.2}, {"time": 1778716800, "open": 65.9, "high": 68.5, "low": 65.7, "close": 66.9}, {"time": 1778803200, "open": 68.5, "high": 72.3, "low": 67.2, "close": 67.7}, {"time": 1779062400, "open": 73.8, "high": 74.4, "low": 73.5, "close": 74.4}];
+  var dailyVol  = [{"time": 1770076800, "value": 9597.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1770163200, "value": 11652.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1770249600, "value": 8225.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1770336000, "value": 6515.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1770595200, "value": 6009.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1770681600, "value": 4556.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1770768000, "value": 7351.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1771804800, "value": 6414.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1771891200, "value": 5895.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1771977600, "value": 3965.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1772064000, "value": 3367.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1772409600, "value": 9917.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1772496000, "value": 5075.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1772582400, "value": 5377.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1772668800, "value": 3928.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1772755200, "value": 5622.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773014400, "value": 3790.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1773100800, "value": 2649.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1773187200, "value": 2515.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773273600, "value": 4008.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773360000, "value": 2402.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773619200, "value": 2081.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1773705600, "value": 4406.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773792000, "value": 4598.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1773878400, "value": 9566.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1773964800, "value": 5578.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1774224000, "value": 5989.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1774310400, "value": 3247.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1774396800, "value": 3113.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1774483200, "value": 4589.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1774569600, "value": 1931.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1774828800, "value": 5435.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1774915200, "value": 3372.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1775001600, "value": 2192.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1775088000, "value": 2837.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1775520000, "value": 1806.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1775606400, "value": 1908.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1775692800, "value": 1668.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1775779200, "value": 1625.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776038400, "value": 3274.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776124800, "value": 2798.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1776211200, "value": 4666.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776297600, "value": 20643.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776384000, "value": 21437.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776643200, "value": 18708.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1776729600, "value": 9775.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1776816000, "value": 14449.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1776902400, "value": 12915.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1776988800, "value": 7038.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1777248000, "value": 6952.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1777334400, "value": 3443.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1777420800, "value": 2662.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1777507200, "value": 2534.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1777852800, "value": 3751.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1777939200, "value": 3870.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1778025600, "value": 4147.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1778112000, "value": 3385.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1778198400, "value": 7010.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1778457600, "value": 9330.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1778544000, "value": 10811.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1778630400, "value": 5672.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1778716800, "value": 6113.0, "color": "rgba(239, 68, 68, 0.55)"}, {"time": 1778803200, "value": 14782.0, "color": "rgba(34, 197, 94, 0.55)"}, {"time": 1779062400, "value": 8366.0, "color": "rgba(239, 68, 68, 0.55)"}];
+  var m3Data    = [];
+  var m3Vol     = [];
+
+  // ── Tab switching (純前端，目前三個 tab 共用內容) ─────────────
+  document.querySelectorAll('.tab').forEach(function (t) {
+    t.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('active'); });
+      t.classList.add('active');
+    });
+  });
+
+  // ── 5 個維度進度條：點 row 展開明細 ────────────────────────
+  document.querySelectorAll('.dim').forEach(function (d) {
+    var row = d.querySelector('.dim-row');
+    if (!row) return;
+    row.addEventListener('click', function () {
+      d.classList.toggle('expanded');
+    });
+  });
+
+  // ── Chart ────────────────────────────────────────────────────
+  var container = document.getElementById('chart');
+  var chart = null;
+  var candleSeries = null;
+  var volumeSeries = null;
+
+  function ensureChart() {
+    if (chart) return;
+    if (typeof LightweightCharts === 'undefined') return;
+    container.innerHTML = '';
+    chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 340,
+      layout: {
+        background: { type: 'solid', color: '#ffffff' },
+        textColor: '#475569',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: '#f1f5f9' },
+        horzLines: { color: '#f1f5f9' },
+      },
+      rightPriceScale: { borderColor: '#e2e8f0' },
+      timeScale: {
+        timeVisible: false,
+        secondsVisible: false,
+        borderColor: '#e2e8f0',
+      },
+      crosshair: { mode: 0 },
+    });
+    candleSeries = chart.addCandlestickSeries({
+      upColor:        '#ef4444',
+      downColor:      '#10b981',
+      borderUpColor:  '#ef4444',
+      borderDownColor:'#10b981',
+      wickUpColor:    '#ef4444',
+      wickDownColor:  '#10b981',
+    });
+    volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+    });
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0 },
+    });
+    window.addEventListener('resize', function () {
+      if (chart) chart.applyOptions({ width: container.clientWidth });
+    });
+  }
+
+  function loadTf(tf) {
+    var candles, vol, title, intraday;
+    if (tf === 'm3') {
+      candles = m3Data; vol = m3Vol; title = 'M3 盤中走勢'; intraday = true;
+    } else {
+      candles = dailyData; vol = dailyVol; title = '日線走勢（近 3 個月）'; intraday = false;
+    }
+    document.getElementById('chart-title').textContent = title;
+    if (!candles || candles.length === 0) {
+      if (chart) {
+        candleSeries.setData([]);
+        volumeSeries.setData([]);
+      } else {
+        container.innerHTML = '<div class="chart-empty">' +
+          (tf === 'm3' ? '尚無盤中資料（請於開盤後查看）' : '日線資料不足') +
+          '</div>';
+      }
+      return;
+    }
+    ensureChart();
+    candleSeries.setData(candles);
+    if (vol && vol.length) volumeSeries.setData(vol); else volumeSeries.setData([]);
+    chart.timeScale().applyOptions({ timeVisible: intraday, secondsVisible: false });
+    chart.timeScale().fitContent();
+  }
+
+  // initial load
+  loadTf('daily');
+
+  document.querySelectorAll('.tf-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.tf-btn').forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      loadTf(b.dataset.tf);
+    });
+  });
+})();
+</script>
+</body>
+</html>

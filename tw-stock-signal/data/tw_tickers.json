@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-06",
+  "date": "2026-05-22",
   "tickers": [
     {
       "symbol": "1101",
@@ -3302,6 +3302,11 @@
       "market": "twse"
     },
     {
+      "symbol": "4195",
+      "name": "基米-創",
+      "market": "twse"
+    },
+    {
       "symbol": "4306",
       "name": "炎洲",
       "market": "twse"
@@ -4832,6 +4837,11 @@
       "market": "twse"
     },
     {
+      "symbol": "7768",
+      "name": "頌勝科技",
+      "market": "twse"
+    },
+    {
       "symbol": "7769",
       "name": "鴻勁",
       "market": "twse"
@@ -4864,6 +4874,16 @@
     {
       "symbol": "7799",
       "name": "禾榮科",
+      "market": "twse"
+    },
+    {
+      "symbol": "7803",
+      "name": "雲象科技-創",
+      "market": "twse"
+    },
+    {
+      "symbol": "7818",
+      "name": "溢泰實業",
       "market": "twse"
     },
     {
@@ -6227,6 +6247,11 @@
       "market": "otc"
     },
     {
+      "symbol": "3485",
+      "name": "敘豐",
+      "market": "otc"
+    },
+    {
       "symbol": "3489",
       "name": "森寶",
       "market": "otc"
@@ -7189,11 +7214,6 @@
     {
       "symbol": "4979",
       "name": "華星光",
-      "market": "otc"
-    },
-    {
-      "symbol": "4987",
-      "name": "科誠",
       "market": "otc"
     },
     {
@@ -8163,7 +8183,7 @@
     },
     {
       "symbol": "6241",
-      "name": "易通展",
+      "name": "鑫永洋",
       "market": "otc"
     },
     {
@@ -9167,6 +9187,11 @@
       "market": "otc"
     },
     {
+      "symbol": "7772",
+      "name": "耀穎",
+      "market": "otc"
+    },
+    {
       "symbol": "7777",
       "name": "能率亞洲",
       "market": "otc"
@@ -9209,6 +9234,11 @@
     {
       "symbol": "7828",
       "name": "創新服務",
+      "market": "otc"
+    },
+    {
+      "symbol": "7842",
+      "name": "天能綠電",
       "market": "otc"
     },
     {

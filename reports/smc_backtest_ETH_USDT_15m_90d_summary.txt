@@ -1,0 +1,20 @@
+SMC Analyst — Backtest Report
+  symbol            : ETH_USDT_15m_90d
+  total bars        : 8641
+  bars evaluated    : 8401
+  signals fired     : 278
+  wins              : 87
+  losses            : 182
+  open (unresolved) : 9
+  win rate (resolved): 32.3%
+  avg R:R           : 8.52
+  expectancy (R/signal): +1.47
+
+By setup:
+  Breaker Block                       fires= 62  W15 L45 O2  wr= 25.0%  avgR:R=16.42
+  OB Retest Continuation              fires= 95  W39 L54 O2  wr= 41.9%  avgR:R=7.62
+  Mitigation Block                    fires= 67  W17 L48 O2  wr= 26.2%  avgR:R=4.78
+  Trendline Break + Shift             fires= 21  W7 L13 O1  wr= 35.0%  avgR:R=4.25
+  Liquidity-Sweep Reversal            fires=  6  W2 L4 O0  wr= 33.3%  avgR:R=10.68
+  Unicorn (Breaker × FVG)             fires= 24  W5 L18 O1  wr= 21.7%  avgR:R=5.96
+  FVG Fill @ HTF Zone                 fires=  3  W2 L0 O1  wr=100.0%  avgR:R=3.04

@@ -446,6 +446,52 @@ async def backtest_run(req: BacktestRunRequest) -> dict[str, object]:
     return {"status": "running", "config": req.model_dump()}
 
 
+# ============================================================
+# K 線端點 — 從 Shioaji M3 快取回傳歷史 K 線
+# ============================================================
+
+
+@app.get("/api/klines/{symbol}")
+async def klines(
+    symbol: str,
+    days: int = Query(default=5, ge=1, le=30),
+) -> dict[str, object]:
+    """回傳 symbol 最近 days 天的 M3 K 線（從磁碟快取讀取）。"""
+    from backend.shioaji_history_cache import load_cached_m3, concat_history
+
+    history = load_cached_m3(symbol)
+    if not history:
+        # 快取不存在時嘗試即時抓取
+        try:
+            from backend.shioaji_history_cache import fetch_history_m3
+            history = await fetch_history_m3(symbol, days=days)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("klines fetch failed for %s: %s", symbol, exc)
+            raise HTTPException(status_code=503, detail=f"no data for {symbol}")
+
+    df = concat_history(history)
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"no M3 data for {symbol}")
+
+    # 只取最近 days 個交易日
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=days * 2)).date()
+    df = df[df.index.date >= cutoff]
+
+    bars = []
+    for ts, row in df.iterrows():
+        bars.append({
+            "timestamp": int(ts.timestamp() * 1000),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+        })
+
+    return {"symbol": symbol, "interval": "M3", "bars": bars}
+
+
 @app.get("/api/backtest/result")
 async def backtest_result() -> dict[str, object]:
     if state.backtest_status == "idle":

@@ -108,8 +108,13 @@ class SMCScanner:
         daily_df, m3_df = await asyncio.gather(daily_task, m3_task)
 
         if daily_df is None or len(daily_df) < _MIN_DAILY_BARS:
-            logger.warning("%s: insufficient daily bars (%d)", symbol, 0 if daily_df is None else len(daily_df))
-            return []
+            # Shioaji 拉空 daily 通常是 session token 默默過期（API 回 401 不會
+            # raise，只 log 後回空 df）。raise 讓 scan_symbol 外層 retry 觸發
+            # reset_login → 重抓。真的市場異常的話第二次仍會空 → 外層回 []。
+            n = 0 if daily_df is None else len(daily_df)
+            raise RuntimeError(
+                f"{symbol}: insufficient daily bars ({n}); likely stale shioaji session"
+            )
 
         # Daily bias
         daily_struct = detect_market_structure(daily_df, n=self.daily_swing_n)

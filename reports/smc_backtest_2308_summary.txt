@@ -1,0 +1,21 @@
+SMC Analyst — Backtest Report
+  symbol            : 2308
+  total bars        : 7931
+  bars evaluated    : 770
+  signals fired     : 209
+  wins              : 39
+  losses            : 116
+  open (unresolved) : 54
+  win rate (resolved): 25.2%
+  avg R:R           : 29.43
+  expectancy (R/signal): +0.86
+
+By setup:
+  OB Retest Continuation              fires=100  W22 L56 O22  wr= 28.2%  avgR:R=31.04
+  Mitigation Block                    fires= 43  W11 L20 O12  wr= 35.5%  avgR:R=32.06
+  Discount Rally                      fires=  1  W0 L1 O0  wr=  0.0%  avgR:R=1.75
+  Breaker Block                       fires= 38  W3 L25 O10  wr= 10.7%  avgR:R=28.69
+  Liquidity-Sweep Reversal            fires=  9  W3 L3 O3  wr= 50.0%  avgR:R=27.73
+  Trendline Break + Shift             fires=  6  W0 L4 O2  wr=  0.0%  avgR:R=21.35
+  Unicorn (Breaker × FVG)             fires= 10  W0 L5 O5  wr=  0.0%  avgR:R=19.47
+  FVG Fill @ HTF Zone                 fires=  2  W0 L2 O0  wr=  0.0%  avgR:R=1.96

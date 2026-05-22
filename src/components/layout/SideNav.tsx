@@ -13,7 +13,7 @@ interface NavItem {
 
 const items: readonly NavItem[] = [
   { key: "watch",   label: "標的池", icon: "◆", href: "/" },
-  { key: "chart",   label: "圖表",   icon: "▦", href: "/" },
+  { key: "chart",   label: "圖表",   icon: "▦", href: "/klines" },
   { key: "score",   label: "評分",   icon: "★", href: "/" },
   { key: "risk",    label: "風控",   icon: "⚠", href: "/" },
   { key: "backtest", label: "回測", icon: "⌖", href: "/backtest" },
@@ -24,6 +24,7 @@ function isActive(pathname: string | null, item: NavItem): boolean {
   if (!pathname) return false;
   if (item.key === "journal") return pathname.startsWith("/journal");
   if (item.key === "backtest") return pathname.startsWith("/backtest");
+  if (item.key === "chart") return pathname.startsWith("/klines");
   if (item.key === "watch") return pathname === "/";
   return false;
 }

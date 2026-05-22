@@ -1,0 +1,21 @@
+SMC Analyst — Backtest Report
+  symbol            : SOL_USDT_15m_90d
+  total bars        : 8641
+  bars evaluated    : 8401
+  signals fired     : 503
+  wins              : 166
+  losses            : 323
+  open (unresolved) : 14
+  win rate (resolved): 33.9%
+  avg R:R           : 6.94
+  expectancy (R/signal): +1.39
+
+By setup:
+  Mitigation Block                    fires=119  W31 L81 O7  wr= 27.7%  avgR:R=5.72
+  OB Retest Continuation              fires=156  W57 L95 O4  wr= 37.5%  avgR:R=8.12
+  Trendline Break + Shift             fires= 25  W13 L11 O1  wr= 54.2%  avgR:R=4.10
+  Breaker Block                       fires=120  W29 L89 O2  wr= 24.6%  avgR:R=8.20
+  N-Pattern Day Trade                 fires= 21  W8 L13 O0  wr= 38.1%  avgR:R=3.17
+  Unicorn (Breaker × FVG)             fires= 42  W19 L23 O0  wr= 45.2%  avgR:R=7.49
+  Liquidity-Sweep Reversal            fires= 17  W9 L8 O0  wr= 52.9%  avgR:R=2.98
+  FVG Fill @ HTF Zone                 fires=  3  W0 L3 O0  wr=  0.0%  avgR:R=7.04

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 import pandas as pd
@@ -32,15 +33,38 @@ _BEAT1_STRONG_PCT = 3.0       # 第一拍 +3% 以上加分
 _MIN_M3_BARS_TODAY = 8        # 至少要 8 根 M3 K（24 分鐘）才開始評估
 _VALID_PHASES = {"trend_morning", "lunch", "trend_afternoon"}
 
+# Crypto-mode override: when set (hours), treat the last-N-hour window as the
+# session instead of the calendar date. Leaves TWSE behavior untouched when unset.
+_SESSION_WINDOW_HOURS_ENV = "SMC_SESSION_WINDOW_HOURS"
+
+
+def _session_window_hours() -> Optional[float]:
+    raw = os.getenv(_SESSION_WINDOW_HOURS_ENV)
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
 
 def _resample_to_3m_today(ltf_bars: pd.DataFrame, today_date) -> pd.DataFrame:
-    """從 1m bars resample 到 3m，並只取今日盤中（today_date）。
+    """從 1m bars resample 到 3m，並只取「今日盤中」。
 
-    回空 DataFrame 表示沒有今日資料（例如盤前盤後跑 backtest）。
+    TWSE 模式（預設）：依 today_date 過濾日期。
+    Crypto 模式（SMC_SESSION_WINDOW_HOURS 設定）：取最後 N 小時滾動窗。
+
+    回空 DataFrame 表示沒有資料（例如盤前盤後跑 backtest）。
     """
     if ltf_bars is None or ltf_bars.empty:
         return pd.DataFrame()
-    df = ltf_bars[ltf_bars.index.date == today_date]
+    window_h = _session_window_hours()
+    if window_h is None:
+        df = ltf_bars[ltf_bars.index.date == today_date]
+    else:
+        cutoff = ltf_bars.index[-1] - pd.Timedelta(hours=window_h)
+        df = ltf_bars[ltf_bars.index > cutoff]
     if df.empty:
         return pd.DataFrame()
     m3 = df.resample("3min").agg({

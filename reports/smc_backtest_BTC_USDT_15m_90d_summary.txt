@@ -1,0 +1,21 @@
+SMC Analyst — Backtest Report
+  symbol            : BTC_USDT_15m_90d
+  total bars        : 8641
+  bars evaluated    : 8401
+  signals fired     : 476
+  wins              : 44
+  losses            : 355
+  open (unresolved) : 77
+  win rate (resolved): 11.0%
+  avg R:R           : 20.79
+  expectancy (R/signal): -0.34
+
+By setup:
+  Breaker Block                       fires=115  W7 L99 O9  wr=  6.6%  avgR:R=22.52
+  Mitigation Block                    fires=110  W6 L84 O20  wr=  6.7%  avgR:R=18.33
+  OB Retest Continuation              fires=138  W12 L100 O26  wr= 10.7%  avgR:R=24.97
+  Trendline Break + Shift             fires= 36  W5 L21 O10  wr= 19.2%  avgR:R=17.36
+  Unicorn (Breaker × FVG)             fires= 47  W4 L35 O8  wr= 10.3%  avgR:R=19.30
+  FVG Fill @ HTF Zone                 fires=  4  W0 L3 O1  wr=  0.0%  avgR:R=17.90
+  N-Pattern Day Trade                 fires= 12  W8 L4 O0  wr= 66.7%  avgR:R=3.02
+  Liquidity-Sweep Reversal            fires= 14  W2 L9 O3  wr= 18.2%  avgR:R=14.72

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMC｜2330｜CHoCH_DOWN</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #070a0f;
+    --panel: #0d1320;
+    --line: #1a2235;
+    --text: #e6edf6;
+    --muted: #7c8aa6;
+    --accent: #4cc9f0;
+    --warn: #ffb454;
+    --bad: #ef476f;
+    --good: #06d6a0;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; letter-spacing: 1px; margin: 0 0 4px; }
+  .ts { color: var(--muted); font-size: 12px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; margin: 16px 0;
+  }
+  .panel h2 {
+    font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 12px;
+  }
+  #chart { width: 100%; height: 400px; }
+  .empty-chart {
+    color: var(--muted); padding: 140px 0; text-align: center;
+    font-size: 13px; border: 1px dashed var(--line); border-radius: 6px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 6px 0; font-size: 14px; }
+  td.k { color: var(--muted); width: 40%; }
+  td.v { color: var(--text); text-align: right; font-weight: bold; }
+  .pill {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 1px; margin-right: 6px;
+  }
+  .pill.up   { background: rgba(6,214,160,0.15); color: var(--good); border: 1px solid var(--good); }
+  .pill.down { background: rgba(239,71,111,0.15); color: var(--bad);  border: 1px solid var(--bad); }
+  .pill.warn { background: rgba(255,180,84,0.15); color: var(--warn); border: 1px solid var(--warn); }
+  .strength { color: var(--accent); letter-spacing: 4px; font-size: 18px; }
+  .advice { font-size: 15px; line-height: 1.6; color: var(--text); }
+  .notice {
+    background: rgba(255,180,84,0.08); border: 1px solid var(--warn);
+    color: var(--warn); padding: 8px 12px; border-radius: 6px; margin: 12px 0;
+    font-size: 12px;
+  }
+  .footer { color: var(--muted); font-size: 11px; line-height: 1.6; margin-top: 24px; }
+  .legend {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+    font-size: 11px; color: var(--muted);
+  }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px;
+    border-radius: 2px; margin-right: 4px; vertical-align: middle;
+  }
+  .legend .sh::before    { background: #ef476f; }
+  .legend .sl::before    { background: #06d6a0; }
+  .legend .bos::before   { background: #4cc9f0; }
+  .legend .choch::before { background: #ffb454; }
+  .legend .dz::before    { background: rgba(6,214,160,0.45); }
+  .legend .sz::before    { background: rgba(239,71,111,0.45); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>2330 <span class="pill down">CHoCH_DOWN</span></h1>
+    <div class="ts">產生時間：2026-05-15 10:06:00（3m）</div>
+    
+
+    <div class="panel">
+      <h2>K 線圖（最近 30 根）</h2>
+      <div id="chart"></div>
+      <div class="legend">
+        <span class="sh">Swing High ▼</span>
+        <span class="sl">Swing Low ▲</span>
+        <span class="bos">BOS</span>
+        <span class="choch">CHoCH</span>
+        <span class="dz">Demand Zone</span>
+        <span class="sz">Supply Zone</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>強度</h2>
+      <div class="strength">★☆☆</div>
+    </div>
+
+    <div class="panel">
+      <h2>價格資訊</h2>
+      <table><tr><td class="k">當前價</td><td class="v">99.05</td></tr><tr><td class="k">訊號價位</td><td class="v">100.05</td></tr><tr><td class="k">日線變化</td><td class="v">+0.00%</td></tr></table>
+    </div>
+
+    <div class="panel">
+      <h2>市場結構</h2>
+      <table><tr><td class="k">時間框架</td><td class="v">3m</td></tr><tr><td class="k">市場結構</td><td class="v">ranging</td></tr><tr><td class="k">日線方向</td><td class="v">近5日 +0.00%</td></tr></table>
+    </div>
+
+    <div class="panel">
+      <h2>關鍵價區</h2>
+      <table><tr><td class="k">Demand Zone</td><td class="v">—</td></tr><tr><td class="k">Supply Zone</td><td class="v">—</td></tr></table>
+    </div>
+
+    <div class="panel">
+      <h2>操作建議</h2>
+      <div class="advice">警告：結構轉弱，多頭止盈並關注是否形成新空頭趨勢。避免逆勢加碼。</div>
+    </div>
+
+    <div class="footer">
+      本報告為自動產生之技術分析訊號，僅供研究參考，不構成任何投資建議。<br>
+      盈虧自負，投資前請審慎評估自身風險承受能力。<br>
+      Generated at 2026-05-15 17:35:32 by smc_report.
+    </div>
+  </div>
+
+<script>
+(function () {
+  var chartData = [{"time": 1778835600, "open": 100.0, "high": 100.3, "low": 99.7, "close": 100.05}, {"time": 1778835780, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778835960, "open": 98.0, "high": 98.3, "low": 97.7, "close": 98.05}, {"time": 1778836140, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778836320, "open": 100.0, "high": 100.3, "low": 99.7, "close": 100.05}, {"time": 1778836500, "open": 105.0, "high": 105.3, "low": 104.7, "close": 105.05}, {"time": 1778836680, "open": 103.0, "high": 103.3, "low": 102.7, "close": 103.05}, {"time": 1778836860, "open": 100.0, "high": 100.3, "low": 99.7, "close": 100.05}, {"time": 1778837040, "open": 97.0, "high": 97.3, "low": 96.7, "close": 97.05}, {"time": 1778837220, "open": 94.0, "high": 94.3, "low": 93.7, "close": 94.05}, {"time": 1778837400, "open": 96.0, "high": 96.3, "low": 95.7, "close": 96.05}, {"time": 1778837580, "open": 100.0, "high": 100.3, "low": 99.7, "close": 100.05}, {"time": 1778837760, "open": 105.0, "high": 105.3, "low": 104.7, "close": 105.05}, {"time": 1778837940, "open": 115.0, "high": 115.3, "low": 114.7, "close": 115.05}, {"time": 1778838120, "open": 112.0, "high": 112.3, "low": 111.7, "close": 112.05}, {"time": 1778838300, "open": 108.0, "high": 108.3, "low": 107.7, "close": 108.05}, {"time": 1778838480, "open": 105.0, "high": 105.3, "low": 104.7, "close": 105.05}, {"time": 1778838660, "open": 102.0, "high": 102.3, "low": 101.7, "close": 102.05}, {"time": 1778838840, "open": 103.0, "high": 103.3, "low": 102.7, "close": 103.05}, {"time": 1778839020, "open": 105.0, "high": 105.3, "low": 104.7, "close": 105.05}, {"time": 1778839200, "open": 107.0, "high": 107.3, "low": 106.7, "close": 107.05}, {"time": 1778839380, "open": 105.0, "high": 105.3, "low": 104.7, "close": 105.05}, {"time": 1778839560, "open": 100.0, "high": 100.3, "low": 99.7, "close": 100.05}, {"time": 1778839740, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778839920, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778840100, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778840280, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778840460, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778840640, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}, {"time": 1778840820, "open": 99.0, "high": 99.3, "low": 98.7, "close": 99.05}];
+  var markers   = [{"time": 1778836500, "position": "aboveBar", "color": "#ef476f", "shape": "arrowDown", "text": "SH"}, {"time": 1778837220, "position": "belowBar", "color": "#06d6a0", "shape": "arrowUp", "text": "SL"}, {"time": 1778837940, "position": "aboveBar", "color": "#ef476f", "shape": "arrowDown", "text": "SH"}, {"time": 1778838660, "position": "belowBar", "color": "#06d6a0", "shape": "arrowUp", "text": "SL"}, {"time": 1778839200, "position": "aboveBar", "color": "#ef476f", "shape": "arrowDown", "text": "SH"}, {"time": 1778839560, "position": "belowBar", "color": "#ffb454", "shape": "square", "text": "CHoCH↓"}];
+  var demand    = null;
+  var supply    = null;
+
+  var container = document.getElementById('chart');
+
+  if (typeof LightweightCharts === 'undefined') {
+    container.outerHTML = '<div class="empty-chart">無法載入 lightweight-charts CDN，請檢查網路連線。</div>';
+    return;
+  }
+  if (!chartData || chartData.length === 0) {
+    container.outerHTML = '<div class="empty-chart">無 K 線數據（資料來源為空）。</div>';
+    return;
+  }
+
+  var chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 400,
+    layout: {
+      background: { type: 'solid', color: '#070a0f' },
+      textColor:  '#e6edf6',
+    },
+    grid: {
+      vertLines: { color: '#1a2235' },
+      horzLines: { color: '#1a2235' },
+    },
+    timeScale: {
+      timeVisible: true,
+      secondsVisible: false,
+      borderColor: '#1a2235',
+    },
+    rightPriceScale: { borderColor: '#1a2235' },
+    crosshair: { mode: 0 },
+  });
+
+  // Demand zone — green band filling [bottom, top].
+  if (demand) {
+    var dzSeries = chart.addBaselineSeries({
+      baseValue: { type: 'price', price: demand.bottom },
+      topLineColor:   'rgba(6, 214, 160, 0.6)',
+      topFillColor1:  'rgba(6, 214, 160, 0.30)',
+      topFillColor2:  'rgba(6, 214, 160, 0.05)',
+      bottomLineColor:'rgba(6, 214, 160, 0)',
+      bottomFillColor1:'rgba(6, 214, 160, 0)',
+      bottomFillColor2:'rgba(6, 214, 160, 0)',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    dzSeries.setData(chartData.map(function (d) {
+      return { time: d.time, value: demand.top };
+    }));
+  }
+
+  // Supply zone — red band filling [bottom, top].
+  if (supply) {
+    var szSeries = chart.addBaselineSeries({
+      baseValue: { type: 'price', price: supply.top },
+      topLineColor:   'rgba(239, 71, 111, 0)',
+      topFillColor1:  'rgba(239, 71, 111, 0)',
+      topFillColor2:  'rgba(239, 71, 111, 0)',
+      bottomLineColor:'rgba(239, 71, 111, 0.6)',
+      bottomFillColor1:'rgba(239, 71, 111, 0.30)',
+      bottomFillColor2:'rgba(239, 71, 111, 0.05)',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    szSeries.setData(chartData.map(function (d) {
+      return { time: d.time, value: supply.bottom };
+    }));
+  }
+
+  var candles = chart.addCandlestickSeries({
+    upColor:        '#06d6a0',
+    downColor:      '#ef476f',
+    borderUpColor:  '#06d6a0',
+    borderDownColor:'#ef476f',
+    wickUpColor:    '#06d6a0',
+    wickDownColor:  '#ef476f',
+  });
+  candles.setData(chartData);
+
+  if (markers && markers.length) {
+    var t0 = chartData[0].time;
+    var tN = chartData[chartData.length - 1].time;
+    var visible = markers.filter(function (m) {
+      return m.time >= t0 && m.time <= tN;
+    });
+    if (visible.length) candles.setMarkers(visible);
+  }
+
+  chart.timeScale().fitContent();
+
+  window.addEventListener('resize', function () {
+    chart.applyOptions({ width: container.clientWidth });
+  });
+})();
+</script>
+</body>
+</html>
