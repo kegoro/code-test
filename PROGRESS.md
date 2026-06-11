@@ -41,8 +41,10 @@
 | 5 | SMC 疊圖 | 未開始 |
 | 6 | 即時盤 | 未開始 |
 
-**Phase 1 已完成**：DuckDB schema（`kbars_tmf` / `sim_data_gaps` / `sim_sessions`）、Shioaji TMFR1 回補、回放 WS 協定 + 引擎、聚合、單元/整合測試 **37 passed**。
-**Phase 1 未完成**：真資料回補未跑（無憑證）、lightweight-charts UI 未做。
+**Phase 1 已完成**：DuckDB schema（`kbars_tmf` / `sim_data_gaps` / `sim_sessions`）、Shioaji TMFR1 回補、回放 WS 協定 + 引擎、聚合、單元/整合測試 **42 passed**。
+**Phase 1 未完成**：lightweight-charts UI 未做；正規化修正後需**重新回補驗證**（刪 `data/sim_trade.duckdb` 再跑）。
+
+**2026-06-11 真資料首跑發現（已修）**：`_resolve_contract` 一次解析 TMFR1 成功（5277 rows / 5 days / 0 gaps）。但驗出 **Shioaji 1 分 K 時戳標在「bar-close」**（兩盤開盤瞬間都無 K、首根晚 1 分、間隔 60s）。`fetch_tmf.df_to_rows` 已加 **−60s 正規化成 bar-open**（聚合對齊修正 + 救回每盤尾端那根）。⚠️ 既有 `shioaji_fetcher._resample_3m`（M3）吃同款 close-label，可能有相同位移——目前未動（內部一致就不影響 SMC 邏輯），待決定是否稽核。
 
 **檔案位置**：`backend/sim_trade/`（models / sessions / aggregate / protocol / schema.sql / replay / db / fetch_tmf / server + `tests/`）。
 
@@ -50,7 +52,7 @@
 
 ## 已知限制清單
 
-1. **真資料未驗收**：無 Shioaji 憑證，合成資料測試全綠 ≠ 驗收通過。`_resolve_contract` 的 TMFR1 解析待真連線確認（已加固成 3-path：direct → `TMF.TMFR1` → 掃類別找 code）。
+1. **真資料部分驗收**（2026-06-11）：`_resolve_contract` 已在真連線驗證、bar-close 慣例已修；**待重新回補驗證**（日盤應變 300 根 / 08:45 起）+ UI 肉眼確認對齊。
 2. **夜盤跨兩天回補**：午夜後段由次日回補補齊；最新一天夜盤需隔天才完整。
 3. ⚠️ **高週期 closed 語意簡化**：`advance` 單步跨多桶缺口時只標前一桶 closed。圖表渲染正確，但**逐桶 bar-close 事件不完整** → 見下方 Phase 2 進場檢查清單。
 4. **前端未做**。

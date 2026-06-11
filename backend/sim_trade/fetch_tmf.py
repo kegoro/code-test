@@ -62,12 +62,19 @@ def _resolve_contract(api, symbol: str = CONTINUOUS_SYMBOL):
 def df_to_rows(df: pd.DataFrame, contract_month: str, *, source: str = "shioaji") -> list[KbarRow]:
     """Convert a 1-minute OHLCV frame (ts index) into classified ``KbarRow``s.
 
+    Shioaji timestamps each 1-minute bar at its CLOSE (the 08:45–08:46 bar is
+    labelled 08:46), verified against live TMF data. We normalise to bar-OPEN by
+    subtracting one minute so ``ts`` matches the schema/chart convention,
+    higher-TF aggregation aligns to the session open, and the final session
+    minute (labelled at close) is retained instead of dropped.
+
     Bars outside the day/night trading windows are dropped (count logged).
     """
     rows: list[KbarRow] = []
     skipped = 0
-    for ts, r in df.iterrows():
-        ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+    for raw_ts, r in df.iterrows():
+        raw_ts = raw_ts.to_pydatetime() if hasattr(raw_ts, "to_pydatetime") else raw_ts
+        ts = raw_ts - timedelta(minutes=1)          # close-label -> open-label
         classified = classify(ts)
         if classified is None:
             skipped += 1
