@@ -1,184 +1,98 @@
-# Quant Terminal — PROGRESS
+# PROGRESS — 微台指模擬交易平台（sim-trade 模組）
 
-最後更新：2026-05-07
+**最後更新**：2026-06-11
 
-## 目前階段
-**Phase 5 ✅ 完成：A 級掃描面板 UI + FinMind 真實資料接入**
-
-### 本階段交付檔案
-- `backend/scanner_models.py`
-- `backend/volume_profile.py`
-- `backend/scanner_a1.py`
-- `backend/scanner_a2.py`
-- `backend/no_trade_guard.py`
-- `backend/scanner_scheduler.py`
-- `backend/finmind_fetcher.py`
-- `src/components/scanner/SetupScannerPanel.tsx`
-
-### 下一步
-- 升級 FinMind 付費 tier 或接入永豐 Shioaji 解鎖 M3 即時掃描
+> 這份是「跨對話的進度記憶」。新對話說「繼續 sim-trade」，Claude 先讀這份再接手。
+> 分工：策略決策 / 踩坑 → `LESSONS.md`（規則檔）；模組進度 / 狀態 → 本檔。兩者**不混**。
 
 ---
 
-## Phase 5 Hotfix ✅ FinMind 真實資料源串接（2026-05-07）
-
-- 新增 `backend/finmind_fetcher.py`：
-  - `finmind_fetch_daily(symbol, lookback)` — `TaiwanStockPrice` daily OHLCV，欄位重命名 `max→high / min→low / Trading_Volume→volume`
-  - `finmind_fetch_m3(symbol, day)` — `TaiwanStockKBar` 1 分鐘線 → `resample("3min")`
-  - `parse_symbols_env()` — 讀 `SCANNER_SYMBOLS`，預設 6 檔（2382/2330/2449/2317/3231/6515）
-  - 速率限制 0.5s/req、exponential backoff 最多 3 次
-  - `FinMindPaywallError` typed exception：偵測 `"level is register"` / `"update your user level"` 回應，**不重試** 並標記全域 `_intraday_paywalled`
-- `backend/main.py` lifespan：啟動時 `logger.info("scanner symbols: %s", symbols)`，從 `SCANNER_MARKET_HOURS_ONLY` env 讀取盤中限制旗標
-- 驗證結果（盤後測試）：
-  - 6 檔日線全部 200 OK 成功取回
-  - `TaiwanStockKBar` 因免費 tier 受限回 400 → 自動切到 daily-fallback（用日線當 m3 輸入），不 crash、不重試
-  - `GET /api/scanner/setups` 返回 `{"signals": []}`（合理：日線粒度 + 條件嚴格 + 標的多在 VA 之上脫離 sweep 區）
-  - 真實 Volume Profile 範例：2330 POC=2055 / VAH=2200.5 / VAL=1925；2382 POC=321 / VAH=330.5 / VAL=303
-- `.env.example` 補上 `SCANNER_SYMBOLS` 與 `SCANNER_MARKET_HOURS_ONLY`
-- 註：要取得真正 3 分鐘線跑出 A1/A2 即時信號，需把 FinMind 帳號升級到付費 tier；其餘程式無需改動
+## 模組定位
+微台指（TMF）單人 SMC 當沖訓練器：**歷史回放（優先）+ 即時盤（後期）**。僅本機、僅行情、**永不真實下單**。
+與 `backend/sim_book.py`（Telegram 紙上模擬倉）是**不同物**，不可合併。
 
 ---
 
-## Phase 5 已完成（2026-05-07）
+## 關鍵架構決策（已與擁有者確認，實作不可擅改）
 
-### 後端掃描引擎（純函數設計，可重用於回測）
-- `backend/scanner_models.py`：`SetupSignal` / `ConditionCheck` / `VolumeProfileSnapshot` 等型別 + 常數（A1: 6/6 A 級、5/6 B 級；A2: 5/5 A 級、4/5 B 級；DEDUP_WINDOW=30 分鐘）
-- `backend/volume_profile.py`：TPO 直方圖 + 70% Value Area + scipy.find_peaks 找 LVN/HVN（6 個 pytest）
-- `backend/scanner_a1.py`：VA Edge Sweep Reversal — 6 條件（C1 Profile 形狀 / C2 wick 觸 VA / C3+C4 sweep+收回 / C5 POC 穩定 / C6 MSS / C7 Footprint 支撐）（3 個 pytest）
-- `backend/scanner_a2.py`：LVN Acceptance Breakout — 2 前提 + 5 濾網（PRE1 ATR 收縮 / PRE2 LVN 鄰近；F1 量放大 / F2 Delta / F3 Stacked Imbalance / F4 收盤強度 / F5 回測不被吸收）+ R:R ≥ 1.5 過濾（3 個 pytest）
-- `backend/no_trade_guard.py`：8 條硬性 NO TRADE（事件窗 / VA 中央死區 / HTF bias 不明 / 缺 body MSS / Footprint 衝突 / R:R 不足 / 連虧或日損 / spread 異常）
-
-### 排程器與 SSE 推播
-- `backend/scanner_scheduler.py`：`ScannerEngine` — asyncio loop，每 180 秒執行，盤後自動跳過；dedup 30 分鐘；SSE queue broadcast；信號過期主動推 `expire`
-- `backend/main.py` 新增端點（不破壞 Phase 1-4 任何路由）：
-  - `GET  /api/scanner/setups`           當前所有有效信號
-  - `GET  /api/scanner/setups/{symbol}`  特定標的
-  - `GET  /api/scanner/stream`           Server-Sent Events 即時流
-
-### 前端整合
-- `src/components/scanner/SetupScannerPanel.tsx`：右側面板新增掃描表格（代碼/Setup/評分/進場-停損/R:R），SSE 即時更新；A 級綠、B 級黃、失效灰刪除線
-- `src/lib/telegram-message.ts`：新增 `scanner-a1` / `scanner-a2` payload kind + 訊息文案
-- `src/components/dashboard/TelegramStatus.tsx`：補上對應標籤
-- `src/app/api/telegram/route.ts`：未動（自動透過 `isTelegramPayload` 接受新 kind）
-- `src/components/dashboard/DashboardClient.tsx`：在右側欄底部嵌入 `<SetupScannerPanel />`
-
-### 測試 & 構建
-- 後端：12 個 pytest 通過（volume_profile + scanner_a1 + scanner_a2）
-- 前端：**94 / 94 vitest 通過**（原 29 + 既有其他測試）
-- `npm run build` ✅ 通過 TypeScript 嚴格模式
-- 後端啟動驗證：`/api/scanner/setups` 回傳 `{"signals": []}`（預設空 fetcher）
+| 決策 | 內容 | 理由 |
+|---|---|---|
+| 模組落點 | `backend/sim_trade/`（獨立 package） | 要 import Shioaji wrapper、與 backend 同 venv；LESSONS §2.9「Shioaji 盤中屬 backend 領域」 |
+| 資料庫 | 獨立 `data/sim_trade.duckdb`（非 `tw_stock.duckdb`） | 高頻回放寫入與每日 pipeline 解耦、崩潰隔離；連線沿用 `pipeline/store.py` 慣例 |
+| K 線存法 | `kbars_tmf` 1 分 K 為唯一真實來源，高週期即時聚合（`time_bucket` 對齊盤別開盤） | 單一真實來源、零未來函數易保證 |
+| 夜盤歸屬 | `session_date` = 開盤日（夜盤 15:00→次日 05:00 整段綁開盤日） | 回放直覺；⚠️ 與期交所官方（夜盤算**次一交易日**）差一天，對帳須用 `sessions.taifex_trading_day()` |
+| 變速語意 | `speed` = bars/sec（非倍數），UI 標「N 根/秒」 | 「1 根/秒」=現實 60 倍速，叫「1x」會誤導；預留真實速度 1 根/60 秒 |
+| 回放後端 | 獨立 FastAPI app on **:8090**（與 tv_chart :8080 分開） | 回放**有狀態**，不混無狀態 UDF 服務 |
+| 前端圖表 | **lightweight-charts**（裝在 Next.js `src/`） | 免授權、wantgoo 同款；tv_chart 用的授權版 Charting Library 不用 |
+| 資料源 | Shioaji **TMFR1** 近月連續合約 | 自動轉倉；`contract_month` 留稽核、轉倉推 `contract_switch` 事件 |
+| 零未來函數 | cursor 切片，所有聚合/標記只取 `ts ≤ cursor` | 結構上不可能讀到未來，不靠自律 |
+| 誠實回放 | seek 倒退設 `sim_sessions.rewind_occurred`，績效分「乾淨/有回看」 | 防統計自我膨脹 |
 
 ---
 
----
+## 各 Phase 狀態
 
-## Phase 1 ✅ 靜態 UI 三欄骨架（已驗收）
-## Phase 2 ✅ 狀態機 + A/B/C 表單（已驗收）
-## Phase 3 ✅ FinMind 真實 K 線 + 5 條 MA + Volume（已驗收）
-## Phase 3 Hotfix ✅ Watchlist 真實報價 + Skeleton（已驗收）
+| Phase | 內容 | 狀態 |
+|---|---|---|
+| **1** | 資料層 + 回放引擎 | ⚠️ **後端完成、前端未做 → 尚未完全驗收**（原驗收含「可流暢回放」需前端肉眼看） |
+| 2 | 撮合引擎 + 成本模型 | ⛔ 未開始（**進場前必修 KL#3**，見下） |
+| 3 | 部位 / 日誌 / 績效 | 未開始 |
+| 4 | 自動出場（OCO + ATR trailing） | 未開始（**依賴逐桶 bar-close 事件**） |
+| 5 | SMC 疊圖 | 未開始 |
+| 6 | 即時盤 | 未開始 |
 
----
+**Phase 1 已完成**：DuckDB schema（`kbars_tmf` / `sim_data_gaps` / `sim_sessions`）、Shioaji TMFR1 回補、回放 WS 協定 + 引擎、聚合、單元/整合測試 **37 passed**。
+**Phase 1 未完成**：真資料回補未跑（無憑證）、lightweight-charts UI 未做。
 
-## Phase 4 已完成
-
-### Telegram API（規範 5、6）
-- `src/app/api/telegram/route.ts`：POST 端點
-  - 從 `process.env.TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 讀金鑰，未設定回 503 + 友善錯誤
-  - 嚴格 payload 校驗（`isTelegramPayload`），只接受 `grade-a` / `entry-s4` / `raw` 三種結構化 kind
-  - 訊息建構在伺服端執行（client 不能注入任意 HTML）
-  - 呼叫 `https://api.telegram.org/bot{token}/sendMessage`，HTML parse mode
-  - Telegram API 失敗回 502 + reason
-
-### 訊息建構純函式（規範 8、9、10）
-- `src/lib/telegram-message.ts`：
-  - `escapeHtml()` — 處理 `& < >`
-  - `buildTelegramMessage()` — 三種 kind 的格式化
-  - `isTelegramPayload()` — 型別 narrow（拒絕未知 kind / 缺欄位）
-  - 邊界處理：缺 quote 顯示 `—`、無限/NaN 防護
-
-### 訊息文案
-```
-🚀 [A 級 Setup 觸發]
-2382 廣達
-目前報價：285.50 (+2.14%)
-評分：A 級  A:8.6 / B:7.2 / C:9.1
-動作：建議納入 S2 → S3 流程觀察
-時間：2026-05-05 14:32
-```
-```
-🟢 [進場觸發 — S4 Entry]
-2449 京元電子
-目前報價：142.00 (-1.04%)
-評分：B 級
-狀態：允許進場 (S4)
-時間：2026-05-05 14:35
-```
-
-### 前端觸發（規範 5：邏輯解耦）
-- `src/components/dashboard/useTelegramAlerts.ts`：
-  - 兩個獨立 effect 監聽 `scoring.grade` 與 `tradeState`
-  - 用 `useRef` 保存 prev 值 — **邊緣觸發**（只在跨界時送）
-  - 首次掛載不發（`prevRef === null` 不送）→ 避免恢復狀態誤推
-  - 失敗自動分流：503 → `disabled`、其他 → `error`
-- `StateFlow` 改為**受控元件**（`current` + `onChange` props），讓 DashboardClient 持有 state，alert hook 才看得到變化
-- `TelegramStatus` 標籤元件：右上角顯示最新事件 + 狀態 + 時間戳
-
-### 單元測試
-- `tests/telegram-message.test.ts` 11 個 it：
-  - escapeHtml 邊界
-  - isTelegramPayload 各種 happy / malformed
-  - buildTelegramMessage 三種 kind + HTML 注入防護
-
-**累計測試：3 suites / 29 tests passing**
-- `tests/transitions.test.ts` 9
-- `tests/evaluate.test.ts` 9
-- `tests/telegram-message.test.ts` 11
-
-### 部署準備
-- `npm run build` ✅（4 個路由：`/`、`/_not-found`、`/api/kline/[symbol]`、`/api/quotes`、`/api/telegram`）
-- `DEPLOY.md`：3 步驟（GitHub push → Vercel import → env vars）+ 驗收清單 + 常見問題
+**檔案位置**：`backend/sim_trade/`（models / sessions / aggregate / protocol / schema.sql / replay / db / fetch_tmf / server + `tests/`）。
 
 ---
 
-## 下一步（使用者操作）
+## 已知限制清單
 
-1. **本地驗收 Phase 4**
-   ```powershell
-   $env:TELEGRAM_BOT_TOKEN="123456:ABC..."
-   $env:TELEGRAM_CHAT_ID="你的chat_id"
-   npm run dev
-   ```
-   - 勾滿 A 級 → 收到第一則訊息
-   - 走 S0→S1→S2→S3，A 級+無旗標下點 S4 → 收到第二則訊息
-
-2. **推到 GitHub + Vercel**：照 `DEPLOY.md` 的 3 步驟
-
-3. **若要更精細的觸發規則**（例如：同一 symbol 60 秒內只發一次）
-   現在是純跨界觸發，反覆勾選 → 取消 → 勾選會重發。如需 cooldown，後續可在 `useTelegramAlerts` 加 timestamp ref。
+1. **真資料未驗收**：無 Shioaji 憑證，合成資料測試全綠 ≠ 驗收通過。`_resolve_contract` 的 TMFR1 解析待真連線確認（已加固成 3-path：direct → `TMF.TMFR1` → 掃類別找 code）。
+2. **夜盤跨兩天回補**：午夜後段由次日回補補齊；最新一天夜盤需隔天才完整。
+3. ⚠️ **高週期 closed 語意簡化**：`advance` 單步跨多桶缺口時只標前一桶 closed。圖表渲染正確，但**逐桶 bar-close 事件不完整** → 見下方 Phase 2 進場檢查清單。
+4. **前端未做**。
+5. **DuckDB 單寫者**：回補與唯讀回放 server 勿同時寫（單人本機無妨）。
 
 ---
 
-## 關鍵決策紀錄（追加 Phase 4）
-| 決策 | 選擇 | 理由 |
-|------|------|------|
-| Token 暴露面 | 只在伺服端 route handler | 規範 6；client bundle 無 token |
-| Payload 介面 | typed union (`grade-a` / `entry-s4` / `raw`) | 防 client 任意傳 HTML，且訊息文案集中在 server |
-| 觸發方式 | edge-triggered + useRef prev | 規範 8 零歧義；不會因重 render 重發 |
-| 首次掛載 | prev=null 時不發 | 規範 9 邊界；避免頁面重整誤推 |
-| StateFlow | 改為受控元件 | 讓父層觀察狀態變化才能觸發 alert |
-| HTML escape | 所有 user-controlled 字串都 escape | 防 Telegram parse_mode HTML 注入 |
-| 失敗 UX | UI 不阻塞，標籤顯示 disabled / error | 沒設 token 時 app 仍能用 |
+## ⛔ Phase 2 進場檢查清單（動撮合引擎前必先做）
+
+1. **[BLOCKING] 修 KL#3 — 補齊逐桶 bar-close 事件**
+   - 做什麼：每個高週期 bucket 在收盤瞬間推明確 `closed=true` 事件。
+   - 為什麼 blocking：**Phase 4 ATR trailing stop「每根 K 收盤才更新停損線」，出場引擎吃的就是 bar-close 事件**；不修 → ATR 漏觸發、停損不動 → 出場錯誤。
+   - 影響檔案：`replay.py::_bar_events`（目前只在 aggregate 成長時補前一桶），改成可靠的「桶關閉」偵測。
+2. 撮合用**同一個 cursor**，限價/觸價只能用「當下這根」判斷（守零未來）。
+3. 成本模型：期交稅 = 契約價值 × 0.00002（買賣各課一次）、手續費預設 NT$20/口/邊（設定檔可調）。
+
+---
+
+## 下一步（依序，不可跳）
+
+1. **真資料驗收**：擁有者跑 `fetch_tmf --days 30` + 啟 server，貼輸出 → 調 `_resolve_contract`。
+2. **最小 lightweight-charts 回放 UI**：補完 Phase 1 原始驗收（流暢回放、週期切換肉眼對齊）。
+3. **Phase 2 撮合**：先清上方 Phase 2 進場檢查清單（含修 KL#3）再寫程式碼。
 
 ---
 
 ## 環境狀態
-- Node：✅ 已安裝
-- Tests：✅ 3 suites / 29 passing
-- Build：✅ Next.js 16.2.4 Turbopack
-- Routes：5 條（1 static + 1 not-found + 3 dynamic API）
-- Secrets：仍走 `.env.local`（範例見 `.env.example`）
+
+- **venv（唯一）**：`tw-stock-signal/.venv`（Python 3.14.4）；backend/ 與 sim_trade 同此 venv 跑
+- **依賴**：duckdb 1.5.2 / pandas 3.0.2 / fastapi 0.136.1 / shioaji 1.3.3 / pytest 9.0.3 / httpx 0.28.1（pytest、httpx 本次新裝）
+- **secrets**：Shioaji 憑證放 `.env.local`（`SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY` 或 `SHIOAJI_API_SECRET`），**絕不 hardcode**；帳號需有**期貨行情權限**
+- **DB 路徑**：預設 `data/sim_trade.duckdb`，可用環境變數 `SIM_TRADE_DB` 覆寫（測試用）
+- **指令**：
+  - 回補：`python -m backend.sim_trade.fetch_tmf --days 30 -v`
+  - 啟 server：`python -m uvicorn backend.sim_trade.server:app --host 127.0.0.1 --port 8090`
+  - 測試：`python -m pytest backend/sim_trade/tests -q`
+  - 看可回放 session：瀏覽器開 `http://127.0.0.1:8090/sim/sessions`
 
 ---
 
-## 恢復方式
-新對話說「繼續」或「Phase 5: backtest 開始」即可。
+## 接手方式（給擁有者）
+新對話貼「**繼續 sim-trade**」→ Claude 先讀本檔 + `LESSONS.md` → 從「下一步」第一項未完成處接續。
+
+---
+> 註：本檔 2026-06-11 起改記錄 sim-trade 模組。先前「Quant Terminal A 級掃描面板」進度（2026-05-07）已封存於 git 歷史，需要時 `git show 98789b7:PROGRESS.md`。
