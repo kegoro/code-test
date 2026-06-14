@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -34,6 +35,19 @@ logger = logging.getLogger("shortage-radar")
 
 _TOKEN = (os.getenv("FINMIND_TOKEN") or os.getenv("FINMIND_API_TOKEN") or "")
 _SLEEP = 0.3   # 每檔之間小睡，降低觸及 FinMind 限流機率
+_ROOT = Path(__file__).resolve().parent.parent
+_CACHE = _ROOT / "data" / "shortage_cache.json"
+
+# 非個股的產業分類（全市場掃要排除）
+_SKIP_INDUSTRY = {
+    "ETF", "ETN", "Index", "大盤", "所有證券", "受益證券", "存託憑證",
+    "上櫃ETF", "上櫃指數股票型基金(ETF)", "指數投資證券(ETN)",
+    "創新板股票", "創新版股票",
+}
+
+
+class RateLimited(Exception):
+    """FinMind 觸及呼叫上限。"""
 
 # 缺料主題 → 代表股（人工維護，第二層報價對應）
 # 缺料主題 → 代表股（名稱以 ticker_name 跑出為準，下面僅備註；新主題隨時加）
@@ -51,7 +65,15 @@ def _fm(dataset: str, code: str, start: str) -> list:
             params={"dataset": dataset, "data_id": code, "start_date": start, "token": _TOKEN},
             timeout=20,
         )
-        return r.json().get("data", [])
+        if r.status_code in (402, 429):
+            raise RateLimited(f"HTTP {r.status_code}")
+        js = r.json()
+        msg = str(js.get("msg", "")).lower()
+        if "limit" in msg or "upper limit" in msg:
+            raise RateLimited(js.get("msg", ""))
+        return js.get("data", [])
+    except RateLimited:
+        raise
     except Exception as exc:
         logger.warning("%s %s failed: %s", dataset, code, exc)
         return []
@@ -166,6 +188,99 @@ def render(results: list[dict], title: str = "缺貨雷達") -> str:
     return "\n".join(lines)
 
 
+# ── 快取（斷點續跑）─────────────────────────────────────────────────────────
+
+def _load_cache() -> dict[str, dict]:
+    try:
+        return json.loads(_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_cache(cache: dict[str, dict]) -> None:
+    _CACHE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CACHE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(_CACHE)
+
+
+# ── 全市場掃描（斷點續跑 + 限流即停）─────────────────────────────────────────
+
+def scan_all(resume: bool = True, flush_every: int = 20, limit: int | None = None) -> dict:
+    """掃全市場個股缺貨分數，寫快取。遇限流即停並保存進度，可重跑續接。
+
+    limit：本次最多掃幾檔（分批用，None=不限）。
+    回傳 {"done": n, "total": m, "rate_limited": bool}。
+    """
+    from backend.season import _load_cache as _ind_cache
+    from backend.ticker_name import lookup
+
+    industries = _ind_cache()                       # {code: industry}
+    targets = {c: ind for c, ind in industries.items()
+               if c.isdigit() and len(c) == 4 and ind not in _SKIP_INDUSTRY}
+    cache = _load_cache() if resume else {}
+
+    todo = [c for c in targets if c not in cache]
+    if limit:
+        todo = todo[:limit]
+    logger.info("scan_all: %d 檔待掃（已快取 %d / 全部 %d）",
+                len(todo), len(cache), len(targets))
+
+    done, rate_limited = 0, False
+    try:
+        for i, code in enumerate(todo, 1):
+            try:
+                res = shortage_score(code, lookup(code))
+            except RateLimited:
+                rate_limited = True
+                logger.warning("觸及 FinMind 限流，於第 %d 檔停止，已保存進度", done)
+                break
+            res["industry"] = targets[code]
+            cache[code] = res
+            done += 1
+            if done % flush_every == 0:
+                _save_cache(cache)
+                logger.info("…已掃 %d/%d", done, len(todo))
+            time.sleep(_SLEEP)
+    finally:
+        _save_cache(cache)
+
+    return {"done": done, "cached": len(cache), "total": len(targets),
+            "rate_limited": rate_limited, "remaining": len(targets) - len(cache)}
+
+
+def industry_rank(min_n: int = 3) -> list[dict]:
+    """從快取聚合產業缺貨排行。"""
+    cache = _load_cache()
+    by_ind: dict[str, list[dict]] = defaultdict(list)
+    for code, r in cache.items():
+        ind = r.get("industry", "其他")
+        by_ind[ind].append(r)
+    rows = []
+    for ind, members in by_ind.items():
+        if len(members) < min_n:
+            continue
+        scores = [m["score"] for m in members]
+        hot = sorted((m for m in members if m["score"] >= 4),
+                     key=lambda m: m["score"], reverse=True)
+        rows.append({
+            "industry": ind, "avg": sum(scores) / len(scores), "n": len(members),
+            "hot": len(hot), "hot_stocks": [(m["code"], m["name"], m["score"]) for m in hot[:5]],
+        })
+    return sorted(rows, key=lambda x: (x["hot"], x["avg"]), reverse=True)
+
+
+def render_rank(rows: list[dict], top: int = 12) -> str:
+    lines = ["🛰️ 全市場缺貨雷達 — 產業排行（財報代理層）\n"]
+    for r in rows[:top]:
+        lines.append(f"━ {r['industry']}  均分{r['avg']:.1f}  熱門{r['hot']}/{r['n']}檔")
+        for code, name, sc in r["hot_stocks"]:
+            lines.append(f"    🔥 {code} {name} [{sc}/6]")
+    lines.append("\n排行依「熱門股數(≥4分)→均分」；分數=合約負債2+毛利2+營收1+存貨1")
+    lines.append("⚠️ 財報代理為疑似缺貨，真價量需配產業報價(第二層待做)")
+    return "\n".join(lines)
+
+
 def main() -> int:
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s | %(message)s")
@@ -173,8 +288,32 @@ def main() -> int:
     p.add_argument("--codes", nargs="*", help="股票代號")
     p.add_argument("--industry", help="掃單一產業（用 season 分類）")
     p.add_argument("--theme", choices=list(THEMES), help="掃缺料主題")
+    p.add_argument("--all", action="store_true", help="全市場掃描（斷點續跑寫快取）")
+    p.add_argument("--limit", type=int, default=None, help="與 --all 併用：本次最多掃幾檔（分批）")
+    p.add_argument("--rank", action="store_true", help="從快取出產業缺貨排行")
+    p.add_argument("--refresh", action="store_true", help="與 --all 併用：清快取重掃")
     p.add_argument("--tg", action="store_true")
     args = p.parse_args()
+
+    # 全市場掃描
+    if args.all:
+        stat = scan_all(resume=not args.refresh, limit=args.limit)
+        print(f"掃描完成：本次 {stat['done']} 檔，累計快取 {stat['cached']}/{stat['total']}，"
+              f"剩餘 {stat['remaining']}" + ("，⚠️觸及限流可稍後再跑 --all 續接" if stat["rate_limited"] else ""))
+        if stat["remaining"] == 0:
+            print("✅ 全市場已掃完，可用 --rank 看排行")
+        return 0
+
+    # 產業排行（從快取）
+    if args.rank:
+        rows = industry_rank()
+        report = render_rank(rows)
+        print(report)
+        if args.tg:
+            import asyncio
+            from backend.daily_signal import _send_telegram
+            asyncio.run(_send_telegram(report))
+        return 0
 
     from backend.ticker_name import lookup
     if args.theme:

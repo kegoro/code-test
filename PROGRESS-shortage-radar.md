@@ -24,8 +24,21 @@
 | Phase | 內容 | 狀態 |
 |-------|------|------|
 | **1** | 財報代理引擎：單檔缺貨分數(0~6) + 主題/單產業掃描 + 排行 | ✅ **完成**（`backend/shortage_radar.py`，CCL 主題驗證通過） |
-| **1.5** | 全市場分批掃 + API限流 + 季快取 + 產業聚合排行 + 接 TG 排程 | ⛔ 未開始（**下一步**） |
+| **1.5** | 全市場分批掃 + API限流 + 季快取 + 產業聚合排行 + 接 TG 排程 | 🔄 **進行中**：掃描機制完成、全市場快取累積中；**接 TG 排程尚未做** |
 | **2** | 產業報價層（真正價量拆解） | ⛔ 未開始（逐源爬，見下） |
+
+## Phase 1.5 已完成（機制）
+- `scan_all(resume, flush_every, limit)`：全市場個股掃（排除 ETF/ETN/Index…），**斷點續跑**（已快取的跳過）、**遇限流即停並保存**（`RateLimited`）、每 20 檔 flush。
+- 全市場個股 **2487 檔**（`stock_industry.json` 過濾 4 碼數字 + 排除非個股）。
+- 快取 `data/shortage_cache.json`（{code:{score,tags,industry,name}}）；衍生檔，**未入 git**。
+- `industry_rank(min_n=3)` + `render_rank()`：產業排行（依 熱門股數≥4分 → 均分）。
+- CLI：`--all [--limit N] [--refresh]`（掃描）、`--rank [--tg]`（排行）。
+- 速度：~1.4s/檔，全市場約 1 小時；FinMind 免費版會限流 → 分批 `--all --limit 300` 多跑幾次，或重跑 `--all` 自動續接。
+
+### Phase 1.5 剩下（接手做）
+1. 跑完全市場：重複 `python -m backend.shortage_radar --all`（限流自停就再跑，直到「剩餘 0」）。
+2. **接 smc_bot 排程 + 指令**：加 `/shortage` 指令（推 `industry_rank` 排行）+ 每週排程（季資料變動慢，不需每日）。改完**重啟 bot**（見 LESSONS §1.5）。
+3. 季更新策略：新季財報出來後 `--all --refresh` 重掃（或加「快取過期」判斷）。
 
 ## Phase 1 已完成內容（`backend/shortage_radar.py`）
 - `shortage_score(code,name)` → 0~6 分：合約負債趨勢2 + 毛利QoQ/YoY 2 + 營收YoY 1 + 存貨備貨1
