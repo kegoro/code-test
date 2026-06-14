@@ -71,6 +71,13 @@ def _safe_err(exc: Exception) -> str:
     """Exception 轉成可安全送 Telegram 的字串。"""
     return _sanitize_for_telegram(f"{type(exc).__name__}: {exc}")
 
+
+def _fmt_lots(vol: int) -> str:
+    """成交量（張）格式化：>=1 萬張顯示 X.X萬張，否則 N張。"""
+    if vol >= 10000:
+        return f"{vol / 10000:.1f}萬張"
+    return f"{vol:,}張"
+
 from dotenv import load_dotenv
 
 from backend import alert_state, watchlist as wl_mod
@@ -88,7 +95,15 @@ from backend import sim_book
 from backend.sim_monitor import check_positions as sim_check_positions
 from backend.sim_suggester import suggest as sim_suggest, SuggestionError
 from backend.overnight_holders import evaluate as evaluate_overnight
-from backend.shioaji_fetcher import shioaji_fetch_daily, shioaji_fetch_m3
+from backend.shioaji_fetcher import (
+    shioaji_fetch_daily,
+    shioaji_fetch_m3,
+    shioaji_scan_gainers,
+)
+from backend.momentum_scan import scan as run_momentum_scan, MIN_CHANGE_PCT
+from backend import diamond_score
+from backend import pe_valuation
+from backend import pullback_check
 from backend.smc_analyst.context import gather_context
 from backend.smc_analyst.pipeline import analyse_watchlist
 from backend.smc_detector import SMCSignal
@@ -98,6 +113,8 @@ from backend.theme_filter import filter_focus_items, format_short_summary
 
 logger = logging.getLogger("smc-bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# httpx 每次 getUpdates 都用 INFO 印含 bot token 的 URL（§3.7 精神：log 也不該留 token）
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env.local")
@@ -379,6 +396,297 @@ class SMCBot:
                 logger.warning("send sim exit alert failed: %s", exc)
         if sim_alerts:
             logger.info("sim_monitor closed %d positions", len(sim_alerts))
+
+    # ── 漲幅榜推播（12:30 / 13:00 / 13:30）─────────────────────────────────────
+    _GAINER_THRESHOLD = 5.0   # 漲幅門檻 %
+    _GAINER_MAX_ROWS = 40     # Telegram 訊息最多列幾檔（其餘只報數量）
+
+    async def _job_gainers(self, context):
+        """run_daily 在 12:30 / 13:00 / 13:30 呼叫：掃上市普通股當日漲幅 >= 門檻。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        if now.weekday() >= 5:   # 週末不跑（假日靠 market_active 過濾）
+            return
+        try:
+            scan = await shioaji_scan_gainers(self._GAINER_THRESHOLD)
+        except Exception as exc:
+            logger.warning("gainer scan failed: %s", exc)
+            try:
+                await context.bot.send_message(
+                    chat_id=_CHAT_ID,
+                    text=_sanitize_for_telegram(f"⚠️ 漲幅榜掃描失敗：{_safe_err(exc)}"),
+                )
+            except Exception:
+                pass
+            return
+        if not scan.market_active:   # 假日 / 休市 → 不推誤導訊息
+            logger.info("gainer scan: market inactive, skip push")
+            return
+        try:
+            await context.bot.send_message(
+                chat_id=_CHAT_ID, text=self._format_gainers(now, scan),
+            )
+            logger.info("gainer scan pushed: %d gainers", len(scan.gainers))
+        except Exception as exc:
+            logger.warning("send gainer list failed: %s", exc)
+
+    def _format_gainers(self, now, scan) -> str:
+        hhmm = now.strftime("%H:%M")
+        head = f"🔥 今日漲幅 ≥{self._GAINER_THRESHOLD:.0f}% 強勢股（上市）{hhmm}"
+        if not scan.gainers:
+            return f"{head}\n掃 {scan.total_scanned} 檔，目前無漲幅達標個股。"
+        lines = [
+            head,
+            f"共 {len(scan.gainers)} 檔（掃 {scan.total_scanned} 檔上市普通股）",
+            "",
+        ]
+        for g in scan.gainers[: self._GAINER_MAX_ROWS]:
+            lines.append(
+                f"+{g.change_rate:.2f}% {g.code} {g.name}  "
+                f"收 {g.close:,.2f}  量 {_fmt_lots(g.volume)}"
+            )
+        extra = len(scan.gainers) - self._GAINER_MAX_ROWS
+        if extra > 0:
+            lines.append(f"…還有 {extra} 檔（已依漲幅排序取前 {self._GAINER_MAX_ROWS}）")
+        return "\n".join(lines)
+
+    async def cmd_gainers(self, update, context):
+        """手動觸發漲幅榜掃描（內容同 12:30/13:00/13:30 自動推播）。用法：/gainers"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        await update.message.reply_text("🔍 掃上市漲幅榜中…")
+        try:
+            scan = await shioaji_scan_gainers(self._GAINER_THRESHOLD)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_gainers(now, scan))
+
+    # ── 當沖選股篩選 /scan（大盤+漲幅+均線+量能+型態）─────────────────────────
+    _SCAN_MAX_ROWS = 15
+
+    async def cmd_daytrade_scan(self, update, context):
+        """當沖選股：大盤 + 漲幅≥5% + 均線多頭未發散 + 量能1.5× + 型態加分。用法：/scan"""
+        await update.message.reply_text("🎯 當沖選股掃描中…（含逐檔日線分析，約 30 秒）")
+        try:
+            result = await run_momentum_scan()
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_scan(now, result))
+
+    def _format_scan(self, now, r) -> str:
+        hhmm = now.strftime("%m-%d %H:%M")
+        mk = "✅" if r.market_ok else "⚠️"
+        pct = (r.advancers / (r.scanned or 1)) * 100
+        head = [
+            f"🎯 當沖選股 /scan  {hhmm}",
+            f"大盤：{r.market_state} {mk}（漲 {r.advancers} / 跌 {r.decliners}，占比 {pct:.0f}%）",
+            f"漲幅≥{MIN_CHANGE_PCT:.0f}%：{r.raw_gainers} 檔 → 通過四關：{len(r.candidates)} 檔（掃 {r.scanned}）",
+        ]
+        if not r.market_ok:
+            head.append("⚠️ 大盤偏空，依你第 1 條：今日謹慎或不進場")
+        if not r.candidates:
+            head.append("")
+            head.append("四關全過：0 檔。漲幅夠但均線/量能不符，今天可能沒好標的。")
+            return "\n".join(head)
+        lines = head + [""]
+        for idx, c in enumerate(r.candidates[: self._SCAN_MAX_ROWS], 1):
+            star = "⭐" * c.score
+            lines.append(
+                f"{idx}. {c.code} {c.name} +{c.change_rate:.1f}%  量{c.vol_ratio:.1f}× {star}"
+            )
+            if c.tags:
+                lines.append(f"   {' '.join(c.tags)}")
+            lines.append(
+                f"   月:{c.tf_monthly.trend} 週:{c.tf_weekly.trend} 日:{c.tf_daily.trend}"
+            )
+        extra = len(r.candidates) - self._SCAN_MAX_ROWS
+        if extra > 0:
+            lines.append(f"…還有 {extra} 檔（依型態分排序取前 {self._SCAN_MAX_ROWS}）")
+        lines.append("")
+        lines.append("型態分=糾結+收縮+破20日高+週多頭+月多頭；圖形(三角/杯柄)請自行於 12:30-13:30 判讀")
+        return "\n".join(lines)
+
+    # ── 鑽豹評鑒 /dia ─────────────────────────────────────────────────────────
+
+    async def cmd_diamond(self, update, context):
+        """鑽豹評鑒：財報 6 面向 15 分。/dia 2330 [2317…]；無參數=看已記錄高分股。"""
+        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        if not codes:
+            picks = diamond_score.load_picks()
+            if not picks:
+                await update.message.reply_text(
+                    "💎 尚無記錄。用 /dia 2330 評鑒個股，"
+                    f"總分 ≥{diamond_score.RECORD_THRESHOLD} 自動記錄。")
+                return
+            lines = ["💎 鑽豹高分記錄（研究清單）", ""]
+            for p in picks[:20]:
+                lines.append(f"{p['score']:.0f}/15  {p['code']} {p['name']}  ({p['date']})")
+            await update.message.reply_text("\n".join(lines))
+            return
+        codes = codes[:5]   # FinMind 免費額度保護：一次最多 5 檔
+        await update.message.reply_text(f"💎 鑽豹評鑒 {len(codes)} 檔中…（每檔約 3-5 秒）")
+        for code in codes:
+            try:
+                r = await diamond_score.evaluate(code)
+            except Exception as exc:
+                await update.message.reply_text(f"{code}：{_safe_err(exc)}")
+                continue
+            await update.message.reply_text(self._format_diamond(r))
+
+    def _format_diamond(self, r) -> str:
+        bar = "🟢" if r.score >= 10 else ("🟡" if r.score >= 6 else "🔴")
+        lines = [f"💎 {r.code} {r.name} 鑽豹評鑒 {bar} {r.score:.0f} / {r.max_score:.0f}"]
+        for it in r.items:
+            lines.append(f"{'✅' if it.got == it.max else ('⚠️' if it.got > 0 else '❌')} "
+                         f"{it.name} {it.got:.0f}/{it.max:.0f}：{it.note}")
+        if r.recorded:
+            lines.append("")
+            lines.append(f"📌 已記入研究清單（/dia 查看）")
+        return "\n".join(lines)
+
+    # ── 本益比合理價 /pe ──────────────────────────────────────────────────────
+
+    async def cmd_pe(self, update, context):
+        """合理股價=預估EPS×本益比。/pe 2330 或 /pe 2330 65（自估全年 EPS）。"""
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "用法：/pe 2330（用近4季EPS）或 /pe 2330 65（自估全年EPS=65）")
+            return
+        code = args[0].strip()
+        est = None
+        if len(args) >= 2:
+            try:
+                est = float(args[1])
+            except ValueError:
+                await update.message.reply_text(f"EPS 看不懂：{args[1]}（要數字）")
+                return
+        await update.message.reply_text(f"🧮 {code} 本益比估值中…")
+        try:
+            v = await pe_valuation.evaluate(code, est)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        await update.message.reply_text(self._format_pe(v))
+
+    def _format_pe(self, v) -> str:
+        def f(x, fmt=",.1f"):
+            return format(x, fmt) if x == x else "—"
+        ind = "、".join(v.industries) if v.industries else "—"
+        lines = [
+            f"🧮 {v.code} {v.name} 合理價試算",
+            f"產業：{ind}",
+            f"現價 {f(v.price)}｜目前PE {f(v.per_current)}",
+            f"歷史PE（近{f(v.per_years)}年）P25/P50/P75 = "
+            f"{f(v.per_p25)} / {f(v.per_p50)} / {f(v.per_p75)}",
+            f"EPS：{f(v.eps_used,',.2f')}（{v.eps_source}）"
+            + (f"，近4季={f(v.eps_ttm,',.2f')}" if v.eps_source == "自估" else ""),
+            "",
+            f"合理價 = EPS × 歷史PE：",
+            f"  保守(P25) {f(v.fair_low)}",
+            f"  合理(P50) {f(v.fair_mid)}",
+            f"  樂觀(P75) {f(v.fair_high)}",
+        ]
+        if v.price == v.price and v.fair_mid == v.fair_mid and v.fair_mid > 0:
+            gap = (v.price - v.fair_mid) / v.fair_mid * 100
+            lines.append(f"現價 vs 合理價(P50)：{gap:+.1f}%")
+        lines.append("")
+        lines.append("產業PE無法自動算（FinMind付費牆）；要比同業就對同業跑 /pe")
+        return "\n".join(lines)
+
+    # ── 拉回整理 /pullback ────────────────────────────────────────────────────
+
+    async def cmd_pullback(self, update, context):
+        """拉回整理檢查（週/月線）。/pullback 2330 …；無參數=鑽豹記錄+watchlist。"""
+        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        if not codes:
+            codes = [p["code"] for p in diamond_score.load_picks()]
+            try:
+                codes += [e.symbol for e in wl_mod.load().entries]
+            except Exception:
+                pass
+            codes = list(dict.fromkeys(codes))   # 去重保序
+        if not codes:
+            await update.message.reply_text(
+                "沒有標的可查。/pullback 2330 2317 指定，"
+                "或先用 /dia、/wl_add 建清單。")
+            return
+        codes = codes[:15]
+        await update.message.reply_text(f"📉 檢查 {len(codes)} 檔拉回整理中…")
+        views = await pullback_check.check_many(codes)
+        await update.message.reply_text(self._format_pullback(views))
+
+    def _format_pullback(self, views) -> str:
+        lines = [
+            f"📉 拉回整理檢查（距52週高 {pullback_check.PULL_MIN:.0f}-"
+            f"{pullback_check.PULL_MAX:.0f}% + 月線趨勢在 + 近4週整理）",
+            "",
+        ]
+        hits = [v for v in views if v.is_candidate]
+        others = [v for v in views if not v.is_candidate]
+        for v in hits + others:
+            if v.error:
+                lines.append(f"▫️ {v.code} {v.name}：{v.error}")
+                continue
+            mark = "✅" if v.is_candidate else "▫️"
+            t = []
+            t.append(f"距高 -{v.pull_pct:.1f}%{'✓' if v.dist_ok else ''}")
+            mtrend = "月MA6↑" if v.monthly_ma6_up else (
+                "價>月MA12" if v.above_monthly_ma12 else "月線轉弱")
+            t.append(f"{mtrend}{'✓' if v.trend_ok else '✗'}")
+            t.append(f"4週區間{v.consol_range_pct:.1f}%{'✓' if v.consol_ok else '✗'}")
+            lines.append(f"{mark} {v.code} {v.name} 收{v.close:,.1f}  " + "｜".join(t))
+        if hits:
+            lines.append("")
+            lines.append(f"✅ 候選 {len(hits)} 檔 — 週/月線圖自行確認型態後再決定")
+        return "\n".join(lines)
+
+    # ── ATM×SMC 策略圖 /chart ─────────────────────────────────────────────────
+
+    async def cmd_chart(self, update, context):
+        """ATM×SMC 策略圖：當日 M3 疊時段高低/OB/進出場/收針。
+
+        /chart 2330（今日）或 /chart 2330 2026-06-10（指定日）。
+        當沖策略圖，只畫單一交易日盤中；開盤未滿 30 分鐘 K 棒不足會擋。
+        """
+        args = context.args or []
+        if args:
+            symbol = args[0].strip()
+            day = args[1].strip() if len(args) >= 2 else None
+        else:
+            # 無參數 = 畫 watchlist 第一檔（讓選單點一下就有圖，呼應 menu 設計原則）
+            try:
+                entries = wl_mod.load().entries
+            except Exception:
+                entries = []
+            if not entries:
+                await update.message.reply_text(
+                    "用法：/chart 2330（今日）或 /chart 2330 2026-06-10（指定某天）\n"
+                    "（watchlist 是空的；先 /wl_add 2330，或直接打 /chart 2330）")
+                return
+            symbol, day = entries[0].symbol, None
+        await update.message.reply_text(f"📈 {symbol} 策略圖生成中…（當日 M3 盤中）")
+        try:
+            from backend.strategy_chart import generate_chart_png
+            png, label = await generate_chart_png(symbol, day)
+        except Exception as exc:
+            logger.exception("chart failed for %s", symbol)
+            await update.message.reply_text(f"❌ 生圖失敗：{_safe_err(exc)}")
+            return
+        bio = BytesIO(png)
+        bio.name = f"chart_{symbol}_{label}.png"
+        await update.message.reply_photo(
+            photo=bio,
+            caption=(f"📈 {symbol} ATM×SMC 策略圖｜{label}\n"
+                     "進出場為機械參考、非下單指示（模擬期）"),
+        )
 
     # ── AI 趨勢分析報告（5 維度評分 + 雙 K 線切換） ───────────────────────────
 
@@ -687,6 +995,214 @@ class SMCBot:
             f"  → {verdict}"
         )
 
+    # ── Andrew TXF 台指期框架 ────────────────────────────────────────────────
+
+    async def cmd_txf(self, update, context):
+        """產生今日台指期訊號卡並記錄。用法：/txf <ORH> <ORL>
+        例：/txf 22300 22180
+        """
+        from backend.daily_signal import (
+            _get_bias, _make_card, _append_log, refresh_layer_a
+        )
+        from datetime import date
+
+        args = context.args or []
+        if len(args) < 2:
+            await update.message.reply_text(
+                "用法：/txf <ORH> <ORL>\n"
+                "例：/txf 22300 22180\n\n"
+                "ORH / ORL 從看盤軟體抄前 30 分鐘高低點"
+            )
+            return
+
+        try:
+            orh = float(args[0])
+            orl = float(args[1])
+        except ValueError:
+            await update.message.reply_text("❌ ORH / ORL 必須是數字")
+            return
+
+        if orh <= orl:
+            await update.message.reply_text("❌ ORH 必須大於 ORL")
+            return
+
+        try:
+            bias_a, a1, a2, a3 = _get_bias()
+        except RuntimeError as exc:
+            await update.message.reply_text(f"❌ Layer A 讀取失敗：{_safe_err(exc)}")
+            return
+
+        card = _make_card(orh, orl, orl, bias_a, a1, a2, a3)
+
+        # log to paper_log.csv
+        from backend.daily_signal import OR_WINDOW_MIN, STOP_PTS, REWARD_MULT, BIAS_THRESHOLD
+        direction = "long" if bias_a >= BIAS_THRESHOLD else ("short" if bias_a <= -BIAS_THRESHOLD else "skip")
+        or_range = orh - orl
+        target_pts = max(or_range * REWARD_MULT, STOP_PTS * REWARD_MULT)
+        _append_log({
+            "date":        date.today().isoformat(),
+            "bias_a":      bias_a,
+            "orh":         orh,
+            "orl":         orl,
+            "or_range":    round(or_range, 1),
+            "direction":   direction,
+            "entry":       orh if direction == "long" else (orl if direction == "short" else ""),
+            "stop":        round(orh - STOP_PTS, 0) if direction == "long" else (round(orl + STOP_PTS, 0) if direction == "short" else ""),
+            "target":      round(orh + target_pts, 0) if direction == "long" else (round(orl - target_pts, 0) if direction == "short" else ""),
+            "actual_exit": "",
+            "actual_pnl":  "",
+            "notes":       "",
+        })
+
+        await update.message.reply_text(f"```\n{card}\n```", parse_mode="Markdown")
+
+    async def cmd_txf_result(self, update, context):
+        """收盤後記錄今日台指期結果。用法：/txf_result <出場價> [備注]
+        例：/txf_result 22270 止損
+        """
+        from backend.log_result import fill_result, _load, _print_stats
+        import io, sys
+
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "用法：/txf_result <出場價> [備注]\n"
+                "例：/txf_result 22270 止損出場"
+            )
+            return
+
+        try:
+            exit_px = float(args[0])
+        except ValueError:
+            await update.message.reply_text("❌ 出場價必須是數字")
+            return
+
+        notes = " ".join(args[1:]) if len(args) > 1 else ""
+
+        # capture print output from fill_result
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            from backend.log_result import fill_result as _fill
+            _fill(exit_px, notes)
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+
+        output = buf.getvalue().strip()
+        await update.message.reply_text(f"```\n{output}\n```", parse_mode="Markdown")
+
+    async def cmd_txf_stats(self, update, context):
+        """顯示台指期紙上模擬累計統計。"""
+        import io, sys
+
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            from backend.log_result import show_stats
+            show_stats()
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old_stdout
+
+        output = buf.getvalue().strip()
+        if not output:
+            output = "（尚無統計資料）"
+        await update.message.reply_text(f"```\n{output}\n```", parse_mode="Markdown")
+
+    async def cmd_shortage(self, update, context):
+        """缺貨雷達：全市場產業缺貨排行（財報代理層）。"""
+        from backend.shortage_radar import industry_rank, render_rank
+        rows = industry_rank()
+        if not rows:
+            await update.message.reply_text(
+                "缺貨雷達快取尚未建立。請先在終端機跑：\n"
+                "python -m backend.shortage_radar --all\n"
+                "（限流會自停，重跑續接，直到『剩餘 0』）"
+            )
+            return
+        await update.message.reply_text(render_rank(rows))
+
+    async def _job_shortage(self, context):
+        """每週一 07:30 推缺貨雷達產業排行。"""
+        try:
+            from backend.shortage_radar import industry_rank, render_rank
+            rows = industry_rank()
+            if rows:
+                await context.bot.send_message(chat_id=_CHAT_ID, text=render_rank(rows))
+        except Exception as exc:
+            logger.warning("shortage job failed: %s", exc)
+
+    async def _job_morning_report(self, context):
+        """07:00 自動推播鑽豹盤前報告。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if datetime.now(ZoneInfo("Asia/Taipei")).weekday() >= 5:
+            return
+        try:
+            from backend.morning_report import generate
+            report = generate()
+            await context.bot.send_message(chat_id=_CHAT_ID, text=report)
+        except Exception as exc:
+            logger.warning("morning report job failed: %s", exc)
+
+    async def _job_txf_morning(self, context):
+        """08:50 推播今日 Layer A 偏向（開盤前最後確認）。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        _tpe = ZoneInfo("Asia/Taipei")
+        now = datetime.now(_tpe)
+        # 只在週一到週五推
+        if now.weekday() >= 5:
+            return
+
+        try:
+            from backend.daily_signal import _get_bias, refresh_layer_a
+            refresh_layer_a()
+            bias_a, a1, a2, a3 = _get_bias()
+        except Exception as exc:
+            logger.warning("txf morning job failed: %s", exc)
+            return
+
+        bias_sign = "+" if bias_a > 0 else ""
+        bar = "▓" * abs(bias_a) + "░" * (3 - abs(bias_a))
+        direction = "多方" if bias_a >= 1 else ("空方" if bias_a <= -1 else "觀望")
+        a1_txt = "↓ 美債偏多" if a1 > 0 else "↑ 美債偏空"
+        a2_txt = "↓ 美元偏多" if a2 > 0 else "↑ 美元偏空"
+        a3_txt = "三指數同紅" if a3 > 0 else ("三指數同綠" if a3 < 0 else "指數分歧")
+
+        msg = (
+            f"☀️ 台指期早安 {now.strftime('%m/%d')}\n"
+            f"Layer A  bias = {bias_sign}{bias_a}  [{bar}]  → {direction}\n"
+            f"  {a1_txt}  ｜  {a2_txt}  ｜  {a3_txt}\n\n"
+            f"09:15 後請輸入今日開盤區間：\n"
+            f"  /txf <ORH> <ORL>"
+        )
+        try:
+            await context.bot.send_message(chat_id=_CHAT_ID, text=msg)
+        except Exception as exc:
+            logger.warning("txf morning push failed: %s", exc)
+
+    async def _job_txf_reminder(self, context):
+        """09:15 提醒：OR 窗口關閉，可以輸入了。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        _tpe = ZoneInfo("Asia/Taipei")
+        now = datetime.now(_tpe)
+        if now.weekday() >= 5:
+            return
+        try:
+            await context.bot.send_message(
+                chat_id=_CHAT_ID,
+                text="⏰ OR 窗口關閉（09:15）\n輸入今日高低點 → /txf <ORH> <ORL>",
+            )
+        except Exception as exc:
+            logger.warning("txf reminder push failed: %s", exc)
+
     # ── sending helpers ──────────────────────────────────────────────────────
 
     async def _send_signal(self, update, s: SMCSignal, daily, m3) -> None:
@@ -706,6 +1222,9 @@ class SMCBot:
         # 的指令。需要參數的指令（/sim_open /sim_close /ai_analyse /wl_add 等）
         # 從 menu 移除、使用者手動打、避免點到誤送空指令。
         commands = [
+            # === 台指期 Andrew 框架 ===
+            BotCommand("txf_stats", "📊 台指期紙上模擬累計統計"),
+            BotCommand("shortage", "🛰️ 缺貨雷達 — 全市場產業缺貨排行"),
             # === 紙上模擬（最常用）===
             BotCommand("sim_status", "📋 今日紙上部位（active + 已結算）"),
             BotCommand("sim_report", "📊 紙上模擬月度成績單"),
@@ -717,6 +1236,11 @@ class SMCBot:
             BotCommand("overnight_check", "🌙 對 watchlist 跑隔日沖警告"),
             BotCommand("watch_alerts", "👀 立刻跑一輪 N 字 + OB watcher"),
             BotCommand("analyst_scan", "🧠 對 watchlist 跑 7-setup pipeline"),
+            BotCommand("gainers", "🔥 今日上市漲幅 ≥5% 強勢股"),
+            BotCommand("scan", "🎯 當沖選股(漲幅+均線+量能+型態)"),
+            BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
+            BotCommand("pullback", "📉 拉回整理檢查(週/月線)"),
+            BotCommand("chart", "📈 ATM×SMC 策略圖(watchlist首檔；/chart 2330指定)"),
         ]
         await app.bot.set_my_commands(commands)
         logger.info("registered %d telegram bot commands", len(commands))
@@ -738,11 +1262,21 @@ class SMCBot:
         app.add_handler(CommandHandler("overnight_check", self.cmd_overnight_check))
         app.add_handler(CommandHandler("analyst_scan", self.cmd_analyst_scan))
         app.add_handler(CommandHandler("watch_alerts", self.cmd_watch_alerts))
+        app.add_handler(CommandHandler("gainers", self.cmd_gainers))
+        app.add_handler(CommandHandler("scan", self.cmd_daytrade_scan))
+        app.add_handler(CommandHandler("dia", self.cmd_diamond))
+        app.add_handler(CommandHandler("pe", self.cmd_pe))
+        app.add_handler(CommandHandler("pullback", self.cmd_pullback))
+        app.add_handler(CommandHandler("chart", self.cmd_chart))
         app.add_handler(CommandHandler("ai_analyse", self.cmd_ai_analyse))
         app.add_handler(CommandHandler("sim_open", self.cmd_sim_open))
         app.add_handler(CommandHandler("sim_close", self.cmd_sim_close))
         app.add_handler(CommandHandler("sim_status", self.cmd_sim_status))
         app.add_handler(CommandHandler("sim_report", self.cmd_sim_report))
+        app.add_handler(CommandHandler("txf", self.cmd_txf))
+        app.add_handler(CommandHandler("txf_result", self.cmd_txf_result))
+        app.add_handler(CommandHandler("txf_stats", self.cmd_txf_stats))
+        app.add_handler(CommandHandler("shortage", self.cmd_shortage))
 
         # JobQueue：盤中每 3 分鐘自動跑一次 N 字 watcher（含 dedup）
         if app.job_queue is not None:
@@ -753,6 +1287,41 @@ class SMCBot:
                 name="n-pattern-watcher",
             )
             logger.info("scheduled n-pattern-watcher: every 180s")
+
+            # 漲幅榜：每天 12:30 / 13:00 / 13:30（台北時間）推上市 5%+ 強勢股
+            from datetime import time as _dt_time
+            from zoneinfo import ZoneInfo
+            _tpe = ZoneInfo("Asia/Taipei")
+            # 07:00 鑽豹盤前報告
+            app.job_queue.run_daily(
+                self._job_morning_report,
+                time=_dt_time(hour=7, minute=0, tzinfo=_tpe),
+            )
+            # 台指期早安推播（08:50）
+            app.job_queue.run_daily(
+                self._job_txf_morning,
+                time=_dt_time(hour=8, minute=50, tzinfo=_tpe),
+            )
+            # 09:15 OR 窗口提醒
+            app.job_queue.run_daily(
+                self._job_txf_reminder,
+                time=_dt_time(hour=9, minute=15, tzinfo=_tpe),
+            )
+            for _hh, _mm in ((12, 30), (13, 0), (13, 30)):
+                app.job_queue.run_daily(
+                    self._job_gainers,
+                    time=_dt_time(hour=_hh, minute=_mm, tzinfo=_tpe),
+                    name=f"gainers-{_hh:02d}{_mm:02d}",
+                )
+            logger.info("scheduled gainers push: 12:30 / 13:00 / 13:30 (Asia/Taipei)")
+            # 每週一 07:30 缺貨雷達產業排行（季資料變動慢，週更即可）
+            app.job_queue.run_daily(
+                self._job_shortage,
+                time=_dt_time(hour=7, minute=30, tzinfo=_tpe),
+                days=(0,),
+                name="shortage-weekly",
+            )
+            logger.info("scheduled shortage radar: Mon 07:30 (Asia/Taipei)")
         else:
             logger.warning("JobQueue 不可用（pip install 'python-telegram-bot[job-queue]'）")
         logger.info("SMC bot polling …")
