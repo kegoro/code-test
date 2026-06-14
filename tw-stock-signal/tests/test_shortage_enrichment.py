@@ -172,13 +172,18 @@ class TestPEAnalysis:
         assert flag == "sweet_spot"
 
     def test_fair_valuation(self):
-        _, flag = _pe_analysis(_per([20.0]))
+        _, flag = _pe_analysis(_per([25.0]))
+        assert flag == "fair"
+
+    def test_fair_covers_premium_monopoly(self):
+        # 壟斷型龍頭常見的 25-30x 也屬 fair，不懲罰
+        _, flag = _pe_analysis(_per([28.0]))
         assert flag == "fair"
 
     def test_expensive(self):
-        per_val, flag = _pe_analysis(_per([30.0]))
+        per_val, flag = _pe_analysis(_per([40.0]))
         assert flag == "expensive"
-        assert per_val == pytest.approx(30.0)
+        assert per_val == pytest.approx(40.0)
 
     def test_negative_per_returns_unknown(self):
         # Loss-making stock → PER negative
@@ -312,13 +317,15 @@ class TestEnrichShortageSignal:
         assert result.score_delta > 0
         assert any("本益比" in b for b in result.boosts)
 
-    def test_expensive_per_gives_penalty(self):
+    def test_expensive_per_is_neutral_no_penalty(self):
+        # 高本益比只提醒，不扣分——壟斷型龍頭享有溢價是正常的
         result = enrich_shortage_signal(
             pd.DataFrame(), pd.DataFrame(), pd.DataFrame(),
-            per_df=_per([35.0]),
+            per_df=_per([40.0]),
         )
-        assert result.score_delta < 0
-        assert any("本益比偏高" in w for w in result.warnings)
+        assert result.score_delta == 0
+        assert any("本益比偏高" in b for b in result.boosts)
+        assert all("本益比偏高" not in w for w in result.warnings)
 
     def test_sweet_spot_per_gives_boost(self):
         result = enrich_shortage_signal(

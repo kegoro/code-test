@@ -188,9 +188,9 @@ def _pe_analysis(per_df: pd.DataFrame) -> tuple[float | None, str]:
         return latest, "cheap"        # 超便宜，潛在黑馬
     if latest <= 15:
         return latest, "sweet_spot"   # 雷老闆甜蜜介入點
-    if latest <= 25:
-        return latest, "fair"
-    return latest, "expensive"        # 估值偏高，需更強基本面支撐
+    if latest <= 30:
+        return latest, "fair"         # 正常溢價範圍（含壟斷型龍頭）
+    return latest, "expensive"        # 明顯偏高，只提醒不扣分
 
 
 # ── 5. 存貨週轉 ───────────────────────────────────────────────────────────────
@@ -294,6 +294,8 @@ def enrich_shortage_signal(
         boosts.append("合約負債成長 📋")
 
     # ── 本益比（金律 2） ──────────────────────────────────────────────────────
+    # 便宜/甜蜜點給加分；高本益比「只提醒，不扣分」——
+    # 壟斷型龍頭本來就享有溢價，不能一刀切懲罰。
     if per_flag == "cheap":
         boosts.append(f"超低本益比 💎{per_val:.1f}x")
         score_delta += 1
@@ -301,8 +303,7 @@ def enrich_shortage_signal(
         boosts.append(f"甜蜜本益比 🎯{per_val:.1f}x（10–15倍）")
         score_delta += 1
     elif per_flag == "expensive":
-        warnings.append(f"本益比偏高 ⚠️{per_val:.1f}x")
-        score_delta -= 1
+        boosts.append(f"本益比偏高 ℹ️{per_val:.1f}x（注意估值）")
 
     # ── 存貨週轉（金律 4） ────────────────────────────────────────────────────
     if inv_flag == "healthy_buildup":
