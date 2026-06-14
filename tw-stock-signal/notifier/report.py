@@ -422,6 +422,96 @@ def build_backtest_message(summary: dict, run_date: str, csv_path: str) -> list[
 
 # ── 量縮不破低報告 ─────────────────────────────────────────────────────────────
 
+def build_shortage_radar_message(
+    signals: list,
+    scan_date: str,
+    symbol_count: int,
+    clusters: dict,
+) -> list[str]:
+    """
+    缺貨雷達報告 Telegram 訊息。
+    signals: list[ShortageSignal]（已排序）
+    clusters: {sector: [symbols]} 同族群共振
+    回傳 list[str]，每段 ≤ 4000 字元（HTML 格式）。
+    """
+    weekday_zh = _WEEKDAY_ZH[date.fromisoformat(scan_date).weekday()]
+    hot = [s for s in signals if s.score >= 4]
+    potential = [s for s in signals if s.score == 3]
+
+    _GRADE_EMOJI = {
+        "強缺貨":  "🔴",
+        "潛在缺貨": "🟠",
+        "觀察中":  "🟡",
+        "不符合":  "—",
+    }
+
+    def _trend_bar(yoy_vals: list) -> str:
+        bars = []
+        for v in yoy_vals:
+            if v is None:
+                bars.append("?")
+            elif v >= 30:
+                bars.append("▲▲")
+            elif v >= 10:
+                bars.append("▲")
+            elif v >= 0:
+                bars.append("▬")
+            else:
+                bars.append("▼")
+        return " ".join(bars)
+
+    def _signal_row(s) -> str:
+        emoji = _GRADE_EMOJI.get(s.grade, "—")
+        acc_str = (
+            f"+{s.acceleration:.1f}%↑" if s.acceleration is not None and s.acceleration > 0
+            else f"{s.acceleration:.1f}%↓" if s.acceleration is not None
+            else ""
+        )
+        yoy_bar = _trend_bar(s.yoy_trend)
+        sector_str = s.sectors[0] if s.sectors else ""
+        return (
+            f"{emoji} <code>{s.symbol}</code> {s.name}\n"
+            f"  YoY {s.latest_yoy:+.1f}% {acc_str} | 趨勢:{yoy_bar} | {sector_str}"
+        )
+
+    lines = [
+        "📡 <b>缺貨雷達掃描報告</b>",
+        f"掃描日期 {scan_date}（{weekday_zh}）| 共掃描 {symbol_count} 檔",
+        f"強缺貨 🔴 {len(hot)} 檔 | 潛在缺貨 🟠 {len(potential)} 檔",
+        "",
+    ]
+
+    if hot:
+        lines.append(f"<b>━━ 🔴 強缺貨訊號（{len(hot)} 檔）━━</b>")
+        for s in hot:
+            lines.append(_signal_row(s))
+        lines.append("")
+
+    if potential:
+        top_n = min(8, len(potential))
+        lines.append(f"<b>━━ 🟠 潛在缺貨（{len(potential)} 檔，前 {top_n}）━━</b>")
+        for s in potential[:top_n]:
+            lines.append(_signal_row(s))
+        lines.append("")
+
+    if clusters:
+        lines.append("<b>━━ 🔗 供應鏈族群共振 ━━</b>")
+        for sector, syms in clusters.items():
+            lines.append(f"  {sector}：{'、'.join(syms)}")
+        lines.append("")
+
+    if not hot and not potential:
+        lines.append("本次掃描無明顯缺貨訊號。")
+
+    lines.append(f"<i>缺貨 = 供需失衡 → 廠商漲價 → 營收暴衝（雷老闆理論）</i>")
+    lines.append(f"<i>掃描完成 {datetime.now().strftime('%H:%M:%S')}</i>")
+
+    messages = []
+    for chunk in _split_message("\n".join(lines)):
+        messages.append(chunk)
+    return messages
+
+
 def build_vol_shrink_message(matches: list, trading_date: str) -> list[str]:
     """
     連續五日量縮不破低 選股報告 Telegram 訊息。

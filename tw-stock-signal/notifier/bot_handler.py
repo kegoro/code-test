@@ -378,6 +378,7 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "指令：\n"
         "  /today              → 今日選股報告（無報告時自動分析）\n"
         "  /history &lt;代號&gt;  → 三層基本面分析（健康度/競爭力/估值）\n"
+        "  /radar [N]          → 缺貨雷達：掃描月營收 YoY 加速標的\n"
         "  /help               → 這則說明",
         parse_mode=ParseMode.HTML,
     )
@@ -535,6 +536,83 @@ async def _cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def _cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /radar [N]  — 缺貨雷達掃描。
+    掃描 watchlist（預設）或最近一次 fetch_job 的股票清單，找月營收 YoY 加速標的。
+    N = 掃描股票數量上限（預設 60，最大 200）。
+    """
+    import yaml
+    from scrapers.finmind.revenue import fetch_monthly_revenue
+    from strategy.shortage_radar import detect_shortage, rank_signals, find_clusters
+    from notifier.report import build_shortage_radar_message
+    from scheduler.calendar import prev_trading_date
+
+    # parse optional N argument
+    args = context.args or []
+    try:
+        max_symbols = min(int(args[0]), 200) if args else 60
+    except (ValueError, IndexError):
+        max_symbols = 60
+
+    thinking = await update.message.reply_text(
+        f"📡 <b>缺貨雷達啟動中…</b>\n掃描 watchlist 月營收（最多 {max_symbols} 檔）",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        # Load watchlist
+        try:
+            with open(settings.watchlist_path, encoding="utf-8") as f:
+                stocks: list[dict] = yaml.safe_load(f)["stocks"]
+        except Exception:
+            stocks = await _get_universe()
+
+        stocks = stocks[:max_symbols]
+        await thinking.edit_text(
+            f"📡 <b>缺貨雷達掃描中…</b> 共 {len(stocks)} 檔，逐一抓取月營收…",
+            parse_mode=ParseMode.HTML,
+        )
+
+        sem = asyncio.Semaphore(3)  # 免費 tier 限制
+        scan_date = prev_trading_date().isoformat()
+
+        async def _fetch_one_revenue(stock: dict):
+            async with sem:
+                df = await fetch_monthly_revenue(stock["symbol"], months=15)
+                return stock, df
+
+        tasks = [_fetch_one_revenue(s) for s in stocks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        shortage_signals = []
+        for item in results:
+            if isinstance(item, Exception):
+                continue
+            stock, rev_df = item
+            sig = detect_shortage(stock["symbol"], stock["name"], rev_df)
+            if sig is not None and sig.score >= 2:  # 只保留觀察中以上
+                shortage_signals.append(sig)
+
+        ranked = rank_signals(shortage_signals)
+        clusters = find_clusters(ranked)
+
+        await thinking.delete()
+        messages = build_shortage_radar_message(
+            ranked, scan_date, len(stocks), clusters
+        )
+        for msg in messages:
+            if msg.strip():
+                await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+                await asyncio.sleep(0.4)
+
+    except Exception as exc:
+        logger.error(f"[bot] /radar failed: {exc}")
+        await thinking.edit_text(
+            f"❌ 缺貨雷達掃描失敗：<code>{exc}</code>", parse_mode=ParseMode.HTML
+        )
+
+
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
     if not text:
@@ -624,9 +702,10 @@ def build_application(with_scheduler: bool = False) -> Application:
     else:
         builder = builder.post_init(_post_init_bot_only)
     app = builder.build()
-    app.add_handler(CommandHandler("help",  _cmd_help))
-    app.add_handler(CommandHandler("start", _cmd_help))
-    app.add_handler(CommandHandler("today", _cmd_today))
+    app.add_handler(CommandHandler("help",    _cmd_help))
+    app.add_handler(CommandHandler("start",   _cmd_help))
+    app.add_handler(CommandHandler("today",   _cmd_today))
     app.add_handler(CommandHandler("history", _cmd_history))
+    app.add_handler(CommandHandler("radar",   _cmd_radar))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     return app

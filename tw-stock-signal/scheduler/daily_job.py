@@ -468,6 +468,74 @@ async def sunday_foreign_job() -> None:
 
 # ── Public convenience wrapper (used by main.py and run_now.py) ───────────────
 
+async def shortage_radar_job() -> None:
+    """
+    月末缺貨雷達掃描（每月最後一個交易日 14:50 執行）。
+    掃描 watchlist 月營收 YoY 加速標的，推播 Telegram 缺貨報告。
+    """
+    if not is_trading_day():
+        logger.info("[radar] Non-trading day — skipped")
+        return
+
+    from calendar import monthrange
+    from datetime import date as _date
+    today = _date.today()
+    # Only run on the last 3 calendar days of the month
+    last_day = monthrange(today.year, today.month)[1]
+    if today.day < last_day - 2:
+        logger.info(f"[radar] Not end-of-month (today={today.day}, last={last_day}) — skipped")
+        return
+
+    trading_date = prev_trading_date().isoformat()
+    logger.info(f"[radar] Starting shortage radar scan for {trading_date}")
+
+    try:
+        import asyncio as _asyncio
+        import yaml
+        from scrapers.finmind.revenue import fetch_monthly_revenue
+        from strategy.shortage_radar import detect_shortage, rank_signals, find_clusters
+        from notifier.report import build_shortage_radar_message
+
+        try:
+            with open(settings.watchlist_path, encoding="utf-8") as f:
+                stocks: list[dict] = yaml.safe_load(f)["stocks"]
+        except Exception:
+            stocks = await _get_universe()
+
+        logger.info(f"[radar] Scanning {len(stocks)} watchlist symbols")
+        sem = _asyncio.Semaphore(3)
+
+        async def _one(stock: dict):
+            async with sem:
+                df = await fetch_monthly_revenue(stock["symbol"], months=15)
+                return stock, df
+
+        results = await _asyncio.gather(*[_one(s) for s in stocks], return_exceptions=True)
+
+        signals = []
+        for item in results:
+            if isinstance(item, Exception):
+                continue
+            stock, df = item
+            sig = detect_shortage(stock["symbol"], stock["name"], df)
+            if sig is not None and sig.score >= 2:
+                signals.append(sig)
+
+        ranked = rank_signals(signals)
+        clusters = find_clusters(ranked)
+        logger.info(f"[radar] {len(ranked)} shortage signals ({sum(1 for s in ranked if s.score >= 4)} 強缺貨)")
+
+        messages = build_shortage_radar_message(ranked, trading_date, len(stocks), clusters)
+        for msg in messages:
+            await send_html_message(msg)
+
+        logger.info("[radar] Report sent")
+
+    except Exception as exc:
+        logger.error(f"[radar] Job failed: {type(exc).__name__}: {exc}")
+        await send_error_alert("shortage_radar_job", str(exc))
+
+
 async def run_pipeline(notify: bool = True) -> None:
     """Run the full pipeline in sequence: fetch → analyze → notify (optional)."""
     await fetch_job()
@@ -520,6 +588,12 @@ def start_scheduler() -> AsyncIOScheduler:
         id="vol_shrink_full_job", name="14:40 量縮不破低全市場掃描", replace_existing=True,
     )
 
+    scheduler.add_job(
+        shortage_radar_job,
+        CronTrigger(hour=14, minute=50, timezone=tz),
+        id="shortage_radar_job", name="14:50 缺貨雷達（月末）", replace_existing=True,
+    )
+
     # Weekend jobs
     scheduler.add_job(
         saturday_volume_job,
@@ -535,7 +609,7 @@ def start_scheduler() -> AsyncIOScheduler:
     scheduler.start()
     logger.info(
         f"Scheduler started (tz={tz})\n"
-        f"  平日: 06:55 / 07:00 / 07:30 / 07:55 / 08:00 / 08:15 / 14:40\n"
+        f"  平日: 06:55 / 07:00 / 07:30 / 07:55 / 08:00 / 08:15 / 14:40 / 14:50(月末)\n"
         f"  週六: 09:00 成交量 Top 10\n"
         f"  週日: 09:00 外資買超 Top 10"
     )
