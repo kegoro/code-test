@@ -14,8 +14,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from playwright.async_api import async_playwright
-
 logger = logging.getLogger("aistockmap-scraper")
 
 URL = "https://aistockmap.com/?activeTab=daily"
@@ -151,6 +149,10 @@ _EXTRACT_JS = r"""
 
 async def fetch_daily(timeout_ms: int = 60_000, settle_ms: int = 8_000) -> DailyDigest:
     """打開 aistockmap daily 分頁，等渲染穩定後抽結構化內容。"""
+    # playwright 是重依賴（含瀏覽器），只在真的要抓網頁時才 import，
+    # 讓 FocusItem 等 dataclass 能被純函式模組（theme_filter / shortage_radar）匯入而不需安裝它。
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         try:

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>缺貨雷達 · 2026-06-14T04:54:07</title>
+<style>
+  :root {
+    --bg:#0f1419; --surface:#1a212b; --border:#2a3340;
+    --text:#e6edf3; --muted:#8b95a3;
+    --shortage:#f97316; --pricing:#eab308; --revenue:#22d3ee;
+    --a:#22c55e; --b:#eab308; --c:#8b95a3;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;
+    line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .meta-line { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .legend { font-size:12px; color:var(--muted); margin:8px 0 16px; }
+  table { width:100%; border-collapse:collapse; }
+  td { vertical-align:top; padding:14px 12px; border-bottom:1px solid var(--border); }
+  tr.skipped td { opacity:.5; }
+  td.num { width:36px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .title-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:16px; }
+  .grade { font-weight:800; width:24px; height:24px; display:inline-flex;
+    align-items:center; justify-content:center; border-radius:6px; font-size:13px; }
+  .grade-a { background:rgba(34,197,94,.18); color:var(--a); border:1px solid var(--a); }
+  .grade-b { background:rgba(234,179,8,.18); color:var(--b); border:1px solid var(--b); }
+  .grade-c { background:rgba(139,149,163,.15); color:var(--c); border:1px solid var(--c); }
+  .score { color:var(--muted); font-variant-numeric:tabular-nums; font-size:14px; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:4px; border:1px solid var(--border); }
+  .badge-fresh { color:#f97316; border-color:#f97316; }
+  .badge-stale { color:var(--muted); }
+  .badge-water { color:#ef4444; border-color:#ef4444; }
+  .badge-lock { color:#fbbf24; border-color:rgba(251,191,36,.4); }
+  .meta { font-size:12px; color:var(--muted); margin:4px 0 8px; }
+  .chain { display:flex; align-items:center; gap:6px; margin:8px 0; }
+  .chain-cell { font-size:13px; padding:4px 12px; border-radius:14px; font-weight:600; }
+  .chain-cell.on:nth-child(1) { background:rgba(249,115,22,.18); color:var(--shortage); border:1px solid var(--shortage); }
+  .chain-cell.on:nth-child(3) { background:rgba(234,179,8,.18); color:var(--pricing); border:1px solid var(--pricing); }
+  .chain-cell.on:nth-child(5) { background:rgba(34,211,238,.18); color:var(--revenue); border:1px solid var(--revenue); }
+  .chain-cell.off { background:rgba(255,255,255,.03); color:var(--muted); border:1px solid var(--border); }
+  .arrow { font-size:14px; }
+  .arrow.on { color:var(--text); }
+  .arrow.off { color:var(--border); }
+  .desc { font-size:14px; margin:8px 0; }
+  .kws { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .kw { font-size:12px; padding:3px 9px; border-radius:12px;
+    background:rgba(255,255,255,.04); border:1px solid var(--border); color:var(--muted); }
+  .kw b { color:var(--text); margin-right:4px; }
+  .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:4px;
+    background:rgba(88,166,255,.08); color:#58a6ff; }
+  ul.notes { margin:8px 0 0; padding-left:18px; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📡 缺貨雷達</h1>
+  <div class="meta-line">抓取時間：2026-06-14T04:54:07 · 命中 4/5 條</div>
+  <div class="legend">
+    雷老闆原則 A 因果鏈：<b style="color:var(--shortage)">缺貨</b> →
+    <b style="color:var(--pricing)">漲價</b>（真缺貨確認） →
+    <b style="color:var(--revenue)">營收暴衝</b>　|
+    🔥 今天剛爆 = 當沖題材　⚠️ 過水單 = 營收強但毛利弱（原則 E）
+  </div>
+  <table>
+    <tr class="passed">
+      <td class="num">1</td>
+      <td>
+        <div class="title-line">
+          <span class="grade grade-a">A</span>
+          <strong>矽晶圓供不應求 大廠同步調漲報價</strong>
+          <span class="score">15.0</span>
+          <span class="badge badge-fresh">🔥 今天剛爆</span>
+        </div>
+        <div class="meta">工商時報 · 2026-06-14</div>
+        <div class="chain"><span class="chain-cell on">缺貨</span><span class="arrow on">→</span><span class="chain-cell on">漲價</span><span class="arrow on">→</span><span class="chain-cell on">營收暴衝</span></div>
+        <div class="desc">記憶體與晶圓代工急單湧現，矽晶圓缺貨報價調漲，帶動下游營收暴衝。</div>
+        <div class="kws"><span class="kw"><b>缺貨</b> 缺貨、供不應求、急單</span><span class="kw"><b>漲價</b> 調漲、報價調升</span><span class="kw"><b>營收暴衝</b> 營收暴衝</span></div>
+        <div class="tags"><span class="tag">矽晶圓</span><span class="tag">半導體材料</span></div>
+        <ul class="notes"><li>缺貨+漲價：真缺貨有定價權（原則 A 核心）</li><li>完整因果鏈 缺貨→漲價→營收暴衝</li><li>🔥 今天剛爆，當沖題材</li></ul>
+      </td>
+    </tr>
+    
+    <tr class="passed">
+      <td class="num">2</td>
+      <td>
+        <div class="title-line">
+          <span class="grade grade-c">C</span>
+          <strong>AI 長期趨勢帶動先進封裝缺貨漲價</strong>
+          <span class="score">4.2</span>
+          <span class="badge badge-stale">🐢 長期趨勢</span><span class="badge badge-lock">Premium 限定</span>
+        </div>
+        <div class="meta">產業報告 · 2026-04-20</div>
+        <div class="chain"><span class="chain-cell on">缺貨</span><span class="arrow on">→</span><span class="chain-cell on">漲價</span><span class="arrow off">→</span><span class="chain-cell off">營收暴衝</span></div>
+        <div class="desc">長期結構性需求下，CoWoS 先進封裝持續缺貨、報價走揚。</div>
+        <div class="kws"><span class="kw"><b>缺貨</b> 缺貨</span><span class="kw"><b>漲價</b> 漲價、報價上揚</span></div>
+        <div class="tags"><span class="tag">先進封裝</span><span class="tag">CoWoS</span></div>
+        <ul class="notes"><li>缺貨+漲價：真缺貨有定價權（原則 A 核心）</li><li>🐢 偏長期趨勢，當沖時框不對</li></ul>
+      </td>
+    </tr>
+    
+    <tr class="passed">
+      <td class="num">3</td>
+      <td>
+        <div class="title-line">
+          <span class="grade grade-c">C</span>
+          <strong>ABF 載板傳缺料、交期拉長</strong>
+          <span class="score">2.5</span>
+          <span class="badge badge-fresh">🔥 今天剛爆</span>
+        </div>
+        <div class="meta">經濟日報 · 2026-06-14</div>
+        <div class="chain"><span class="chain-cell on">缺貨</span><span class="arrow off">→</span><span class="chain-cell off">漲價</span><span class="arrow off">→</span><span class="chain-cell off">營收暴衝</span></div>
+        <div class="desc">AI 伺服器拉貨急單塞單，ABF 載板供應吃緊、交期延長。</div>
+        <div class="kws"><span class="kw"><b>缺貨</b> 缺料、供應吃緊、拉貨、急單、塞單、交期拉長</span></div>
+        <div class="tags"><span class="tag">ABF載板</span><span class="tag">PCB</span></div>
+        <ul class="notes"><li>🔥 今天剛爆，當沖題材</li></ul>
+      </td>
+    </tr>
+    
+    <tr class="passed">
+      <td class="num">4</td>
+      <td>
+        <div class="title-line">
+          <span class="grade grade-c">C</span>
+          <strong>某電子廠營收創高 惟毛利率下滑引疑慮</strong>
+          <span class="score">1.0</span>
+          <span class="badge badge-fresh">🔥 今天剛爆</span><span class="badge badge-water">⚠️ 過水單風險</span>
+        </div>
+        <div class="meta">財訊 · 2026-06-14</div>
+        <div class="chain"><span class="chain-cell off">缺貨</span><span class="arrow off">→</span><span class="chain-cell off">漲價</span><span class="arrow off">→</span><span class="chain-cell on">營收暴衝</span></div>
+        <div class="desc">月營收暴增但毛利率下滑，市場質疑是否為過水單。</div>
+        <div class="kws"><span class="kw"><b>營收暴衝</b> 營收創高、營收大增</span></div>
+        <div class="tags"><span class="tag">EMS</span></div>
+        <ul class="notes"><li>⚠️ 過水單風險：營收暴增但提到毛利轉弱（原則 E）</li><li>🔥 今天剛爆，當沖題材</li></ul>
+      </td>
+    </tr>
+    
+    <tr class="skipped">
+      <td class="num">5</td>
+      <td>
+        <div class="title-line"><strong>某公司召開法人說明會</strong></div>
+        <div class="meta">— 無缺貨/漲價/營收命中 —</div>
+      </td>
+    </tr>
+    </table>
+  <div class="meta-line" style="margin-top:28px;">
+    來源：aistockmap daily 焦點 · 評分模型 backend/shortage_radar.py
+  </div>
+</div>
+</body>
+</html>

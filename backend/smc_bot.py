@@ -10,6 +10,8 @@ Commands
   /smc_stop          stop the background scanner
   /aistockmap        manually scan aistockmap.com daily themes
                      (filtered by 雷老闆 A/B 原則, returns short list + HTML)
+  /shortage          缺貨雷達 — 三階段強度評分（缺貨→漲價→營收暴衝, 原則 A）
+                     returns graded list + HTML
 
 當沖 watchlist 指令（持久化到 data/day_trade_watchlist.json）
   /wl              show persistent day-trade watchlist
@@ -79,6 +81,8 @@ from backend.ai_analysis_report import render_html as render_ai_html
 from backend.ai_analysis_screenshot import html_to_png as ai_html_to_png
 from backend.aistockmap_report import render as render_aistockmap_html
 from backend.aistockmap_scraper import fetch_daily as fetch_aistockmap_daily
+from backend.shortage_radar import format_radar_summary, scan_shortage
+from backend.shortage_radar_report import render as render_shortage_html
 from backend.n_pattern_watcher import (
     evaluate_db_approach,
     evaluate_first_beat,
@@ -222,6 +226,22 @@ class SMCBot:
         html = render_aistockmap_html(digest, filtered)
         bio = BytesIO(html.encode("utf-8"))
         bio.name = f"aistockmap_{digest.fetched_at.replace(':', '-')}.html"
+        await update.message.reply_document(document=bio)
+
+    async def cmd_shortage(self, update, context):
+        """缺貨雷達：抓 aistockmap → 三階段強度評分（雷老闆原則 A）。"""
+        await update.message.reply_text("📡 缺貨雷達掃描中（約 10s）…")
+        try:
+            digest = await fetch_aistockmap_daily()
+        except Exception as exc:
+            logger.exception("shortage radar fetch failed")
+            await update.message.reply_text(f"❌ 抓取失敗：{_safe_err(exc)}")
+            return
+        signals = scan_shortage(digest.focus_items)
+        await update.message.reply_text(format_radar_summary(signals))
+        html = render_shortage_html(signals, fetched_at=digest.fetched_at)
+        bio = BytesIO(html.encode("utf-8"))
+        bio.name = f"shortage_radar_{digest.fetched_at.replace(':', '-')}.html"
         await update.message.reply_document(document=bio)
 
     # ── 當沖 watchlist（持久化版，跟 in-memory /smc_watch 分開）────────────────
@@ -714,6 +734,7 @@ class SMCBot:
             BotCommand("wl_clear", "🧹 清空當沖 watchlist"),
             # === 題材 / 隔日沖 / Watcher ===
             BotCommand("aistockmap", "📰 抓 aistockmap 每日題材"),
+            BotCommand("shortage", "📡 缺貨雷達（缺貨→漲價→營收暴衝）"),
             BotCommand("overnight_check", "🌙 對 watchlist 跑隔日沖警告"),
             BotCommand("watch_alerts", "👀 立刻跑一輪 N 字 + OB watcher"),
             BotCommand("analyst_scan", "🧠 對 watchlist 跑 7-setup pipeline"),
@@ -731,6 +752,7 @@ class SMCBot:
         )
         app.add_handler(CommandHandler("smc_scan", self.cmd_scan))
         app.add_handler(CommandHandler("aistockmap", self.cmd_aistockmap))
+        app.add_handler(CommandHandler("shortage", self.cmd_shortage))
         app.add_handler(CommandHandler("wl", self.cmd_wl))
         app.add_handler(CommandHandler("wl_add", self.cmd_wl_add))
         app.add_handler(CommandHandler("wl_del", self.cmd_wl_del))

@@ -398,6 +398,30 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 
 ---
 
+## 2.9 ⭐ 2026-06-14 — 缺貨雷達（原則 A 升級成獨立強度模型）
+
+**背景**：原本「缺貨哲學」只是 `theme_filter.py` 的 `A_缺貨` 單一桶子（命中=1 分），
+無法分辨「只是傳缺貨」與「真缺貨→已漲價→營收暴衝」。新建 `backend/shortage_radar.py`
+把原則 A 的因果鏈拆成三階段照強度打分。
+
+**評分設計（調參時看這裡）**：
+- 三階段基礎分：缺貨 2 / **漲價 3（最高）** / 營收 2 — 漲價是「真缺貨」的確認（原則 A），權重最高
+- 因果鏈加成：缺貨+漲價 +2；完整鏈 缺貨+漲價+營收 再 +3
+- 新鮮度（§2.7.3 今天剛爆）：fresh ×1.25 / stale ×0.6。**stale 罰很重**是刻意的 —
+  當沖時框下「長期趨勢缺貨」沒有日內波動，明講「長期/結構性/趨勢」即使日期是今天也判 stale
+- 過水單（原則 E）：有營收但明講毛利轉弱 ×0.4 並標紅；只有營收沒漲價 ×0.8（純看營收易被騙）
+- 等級：A ≥ 8 / B ≥ 5 / C > 0
+
+**驗證**：`scripts/shortage_radar_brief.py --demo` 樣本 → 完整鏈+fresh=A 15.0、
+缺貨+漲價但長期趨勢=C 4.2、營收+低毛利=C 1.0 過水單標記，符合 A/E/§2.7.3 預期。
+
+**Telegram**：`/shortage` 指令（cmd_shortage，走 `_safe_err`）+ script 可配 schtasks。
+
+**待辦/未解（沿用 §2.6）**：題材→個股映射仍是手動 `/wl_add`（aistockmap 個股多 Premium 鎖）。
+未來可考慮：(1) 接更多缺貨新聞源 (2) A 級命中自動建議股號 (3) 接 cron 自動推。
+
+---
+
 ## 3. 踩過的坑（不要再犯）
 
 ### 3.1 FinMind 免費 tier 不支援分鐘級 K
@@ -502,6 +526,9 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 | aistockmap 爬蟲 | `backend/aistockmap_scraper.py`（Playwright，daily 分頁焦點題材） |
 | 雷老闆 A/B 過濾 | `backend/theme_filter.py`（5 類關鍵字：缺貨/大客戶/新產品/新政策/新技術） |
 | aistockmap HTML 報告 | `backend/aistockmap_report.py` |
+| 缺貨雷達（原則 A 強度） | `backend/shortage_radar.py`（三階段因果鏈 缺貨→漲價→營收暴衝 + 新鮮度 + 過水單懲罰，純函式，`test_shortage_radar.py` 15/15 pass） |
+| 缺貨雷達 HTML 報告 | `backend/shortage_radar_report.py` |
+| 缺貨雷達 script | `scripts/shortage_radar_brief.py --slot=morning\|evening`（推 Telegram）/ `--demo`（離線產 HTML） |
 | 當沖 watchlist | `backend/watchlist.py` → `data/day_trade_watchlist.json`（frozen dataclass + 原子寫入） |
 | 隔日沖偵測（簡化版） | `backend/overnight_holders.py`（門檻：前日 >5% + 今開 >2%） |
 | N 字 setup | `backend/smc_analyst/setups/n_pattern.py`（M3，Beat 1/2/3 + DB） |
@@ -511,7 +538,7 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 | AI 趨勢分析報告 | `backend/ai_analysis_*.py` + `scripts/demo_ai_report*.py`（5 維度評分 + 雙 K 線 + 可展開明細） |
 | AI 評分 5 維度 | 籌碼 45%（FinMind 三大法人）/ 技術 35%（SMC 7-setup）/ 新聞 20%（aistockmap）/ 基本面、題材面 = 參考 |
 | 盤前簡報 script | `scripts/aistockmap_brief.py --slot=morning\|evening`（獨立進程，配 schtasks） |
-| Telegram 指令 | `/aistockmap` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` / `/ai_analyse` / `/smc_scan` |
+| Telegram 指令 | `/aistockmap` / `/shortage` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` / `/ai_analyse` / `/smc_scan` |
 | Telegram 自動 cron | bot 啟動即排 `JobQueue.run_repeating(180s)` 跑 N 字 + OB watcher（盤中才動作） |
 | Telegram bot token | **兩組分開**：`SMC_TELEGRAM_BOT_TOKEN`（這套 smc_bot 專用）+ `TELEGRAM_BOT_TOKEN`（給 `tw-stock-signal/main.py --daemon` 用），同 token 會 409 Conflict |
 | Telegram 安全濾鏡 | `backend/smc_bot.py::_safe_err()` + `_sanitize_for_telegram()` — 所有 exception 推 Telegram 前過濾 JWT/API key/身分證/PYAPI client（§3.7） |
