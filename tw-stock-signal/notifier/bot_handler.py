@@ -594,9 +594,44 @@ async def _cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if sig is not None and sig.score >= 2:  # 只保留觀察中以上
                 shortage_signals.append(sig)
 
-        from strategy.shortage_radar import apply_cascade_bonus, find_rotation_candidates
+        from strategy.shortage_radar import (
+            apply_cascade_bonus, find_rotation_candidates, apply_enrichment,
+        )
+        from strategy.shortage_enrichment import enrich_shortage_signal
+        from scrapers.finmind.financials import (
+            fetch_income_statement, fetch_balance_sheet, fetch_cash_flow, pivot_statement,
+        )
         apply_cascade_bonus(shortage_signals)
         find_rotation_candidates(shortage_signals)
+
+        # Phase 2：對 score≥3 的候選股做財報品質驗證（買機台/毛利/合約負債）
+        top_candidates = [s for s in shortage_signals if s.score >= 3]
+        if top_candidates:
+            await thinking.edit_text(
+                f"📡 <b>缺貨雷達</b> 初篩完成，對 {len(top_candidates)} 檔強訊號做財報驗證…",
+                parse_mode=ParseMode.HTML,
+            )
+        enrich_sem = asyncio.Semaphore(2)
+
+        import pandas as _pd
+
+        async def _enrich_one(sig):
+            async with enrich_sem:
+                inc, bal, cf = await asyncio.gather(
+                    fetch_income_statement(sig.symbol, years=3),
+                    fetch_balance_sheet(sig.symbol, years=3),
+                    fetch_cash_flow(sig.symbol, years=3),
+                    return_exceptions=True,
+                )
+                _empty = _pd.DataFrame()
+                inc_w = pivot_statement(inc) if not isinstance(inc, Exception) and not inc.empty else _empty
+                bal_w = pivot_statement(bal) if not isinstance(bal, Exception) and not bal.empty else _empty
+                cf_w = pivot_statement(cf) if not isinstance(cf, Exception) and not cf.empty else _empty
+                enrichment = enrich_shortage_signal(inc_w, cf_w, bal_w)
+                apply_enrichment(sig, enrichment)
+
+        await asyncio.gather(*[_enrich_one(s) for s in top_candidates], return_exceptions=True)
+
         ranked = rank_signals(shortage_signals)
         clusters = find_clusters(ranked)
 

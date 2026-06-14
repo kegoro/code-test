@@ -31,7 +31,11 @@ ShortageScore 基礎評分 (1–5)：
   score <= 1 → 不符合    —
 """
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 import pandas as pd
+
+if TYPE_CHECKING:
+    from strategy.shortage_enrichment import EnrichmentResult
 
 # ── 供應鏈族群分層表 ──────────────────────────────────────────────────────────
 # 格式：{族群名: {"tier1": [...], "tier2": [...]}}
@@ -148,9 +152,10 @@ class ShortageSignal:
     sectors: list[str] = field(default_factory=list)
     revenue_trend: list[float] = field(default_factory=list)
     yoy_trend: list[float | None] = field(default_factory=list)
-    cascade_bonus: bool = False     # True if Tier1 peer also triggered
+    cascade_bonus: bool = False       # True if Tier1 peer also triggered
     rotation_candidate: bool = False  # True if a "laggard"補漲 in a hot sector
-    rotation_leader: str = ""       # symbol of the already-running leader in sector
+    rotation_leader: str = ""         # symbol of the already-running leader in sector
+    enrichment: "EnrichmentResult | None" = None  # Phase 2 financial quality check
 
 
 def detect_shortage(
@@ -265,6 +270,17 @@ def apply_cascade_bonus(signals: list[ShortageSignal]) -> list[ShortageSignal]:
                 sig.grade = _grade(sig.score, cascade=True)
 
     return signals
+
+
+def apply_enrichment(sig: ShortageSignal, enrichment: "EnrichmentResult") -> None:
+    """
+    Phase 2：將財報品質增益結果疊加到 ShortageSignal。
+    score 調整後仍限制在 1–7（最高 6 基礎 + 1 合約負債上限）。
+    直接 mutate sig。
+    """
+    sig.enrichment = enrichment
+    sig.score = max(1, min(7, sig.score + enrichment.score_delta))
+    sig.grade = _grade(sig.score, cascade=sig.cascade_bonus)
 
 
 # 領先股判定：連續 N 個月 YoY > 20%（已爆發一段、股價可能已反應）

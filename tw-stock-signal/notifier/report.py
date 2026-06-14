@@ -478,10 +478,18 @@ def build_shortage_radar_message(
         yoy_bar = _trend_bar(s.yoy_trend)
         sector_str = s.sectors[0] if s.sectors else ""
         cascade_tag = " 💧龍頭瀑布" if getattr(s, "cascade_bonus", False) else ""
-        return (
+
+        line1 = (
             f"{emoji} <code>{s.symbol}</code> {s.name}{tier_tag}{cascade_tag}\n"
             f"  YoY {s.latest_yoy:+.1f}% {acc_str} | {yoy_bar} | {sector_str}"
         )
+        # Enrichment badges (Phase 2 financial quality)
+        enrichment = getattr(s, "enrichment", None)
+        if enrichment:
+            badges = enrichment.boosts + enrichment.warnings
+            if badges:
+                line1 += "\n  " + " | ".join(badges[:3])
+        return line1
 
     cascade_sigs = [s for s in signals if getattr(s, "cascade_bonus", False)]
     hot = [s for s in signals if s.score >= 4 and not getattr(s, "cascade_bonus", False)]
