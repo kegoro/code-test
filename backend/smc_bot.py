@@ -1115,25 +1115,20 @@ class SMCBot:
         await update.message.reply_text(f"```\n{output}\n```", parse_mode="Markdown")
 
     async def cmd_shortage(self, update, context):
-        """缺貨雷達：全市場產業缺貨排行（財報代理層）。"""
-        from backend.shortage_radar import industry_rank, render_rank
-        rows = industry_rank()
-        if not rows:
-            await update.message.reply_text(
-                "缺貨雷達快取尚未建立。請先在終端機跑：\n"
-                "python -m backend.shortage_radar --all\n"
-                "（限流會自停，重跑續接，直到『剩餘 0』）"
-            )
-            return
-        await update.message.reply_text(render_rank(rows))
+        """缺貨雷達：TWSE 全市場粗篩（量價齊揚，免限流即時）。"""
+        import asyncio
+        from backend.shortage_radar import twse_rank
+        await update.message.reply_text("🛰️ 抓 TWSE 全市場財報中…")
+        report = await asyncio.get_event_loop().run_in_executor(None, twse_rank)
+        await update.message.reply_text(report)
 
     async def _job_shortage(self, context):
-        """每週一 07:30 推缺貨雷達產業排行。"""
+        """每週一 07:30 推缺貨雷達全市場粗篩。"""
         try:
-            from backend.shortage_radar import industry_rank, render_rank
-            rows = industry_rank()
-            if rows:
-                await context.bot.send_message(chat_id=_CHAT_ID, text=render_rank(rows))
+            import asyncio
+            from backend.shortage_radar import twse_rank
+            report = await asyncio.get_event_loop().run_in_executor(None, twse_rank)
+            await context.bot.send_message(chat_id=_CHAT_ID, text=report)
         except Exception as exc:
             logger.warning("shortage job failed: %s", exc)
 

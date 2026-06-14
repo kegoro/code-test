@@ -188,6 +188,84 @@ def render(results: list[dict], title: str = "缺貨雷達") -> str:
     return "\n".join(lines)
 
 
+# ── TWSE 全市場粗篩（免限流，營收YoY + 毛利率）──────────────────────────────
+# 資料源：TWSE OpenAPI（官方、免token、全市場一次一檔）
+#   t187ap05_L      上市月營收彙總（含去年同月增減%）
+#   t187ap06_L_ci   上市綜合損益表-一般業（含營業毛利淨額、營業收入）
+# 註：合約負債/存貨 TWSE 不揭露細項 → 需 FinMind 精查（見 shortage_score）
+
+_TWSE_OPENAPI = "https://openapi.twse.com.tw/v1/opendata"
+
+
+def _twse_get(path: str) -> list:
+    r = requests.get(f"{_TWSE_OPENAPI}/{path}", timeout=30,
+                     headers={"accept": "application/json"})
+    return r.json()
+
+
+def _num(s) -> float | None:
+    try:
+        return float(str(s).replace(",", "").replace("%", "").strip())
+    except Exception:
+        return None
+
+
+def scan_twse() -> dict[str, dict]:
+    """TWSE 全市場（上市一般業）粗篩。回傳 {code: {rev_yoy, gross_margin, eps, prelim}}。"""
+    rev_rows = _twse_get("t187ap05_L")
+    inc_rows = _twse_get("t187ap06_L_ci")
+
+    rev_yoy = {}
+    for r in rev_rows:
+        code = str(r.get("公司代號", "")).strip()
+        y = _num(r.get("營業收入-去年同月增減(%)"))
+        if code and y is not None:
+            rev_yoy[code] = y
+
+    out: dict[str, dict] = {}
+    for r in inc_rows:
+        code = str(r.get("公司代號", "")).strip()
+        name = str(r.get("公司名稱", "")).strip()
+        rev = _num(r.get("營業收入"))
+        gp = _num(r.get("營業毛利（毛損）淨額")) or _num(r.get("營業毛利（毛損）"))
+        eps = _num(r.get("基本每股盈餘（元）"))
+        if not code or not rev:
+            continue
+        gm = (gp / rev * 100) if (gp is not None and rev) else None
+        yoy = rev_yoy.get(code)
+        # 粗篩分數 0~4：量(營收YoY) + 價(毛利率)
+        prelim = 0
+        if yoy is not None and yoy > 10: prelim += 1
+        if yoy is not None and yoy > 30: prelim += 1
+        if gm is not None and gm > 20:   prelim += 1
+        if gm is not None and gm > 30:   prelim += 1
+        out[code] = {"name": name, "rev_yoy": yoy, "gross_margin": gm,
+                     "eps": eps, "prelim": prelim}
+    return out
+
+
+def twse_rank(min_prelim: int = 3) -> str:
+    """TWSE 全市場粗篩 → 產業聚合排行（量價齊揚=疑似缺貨）。"""
+    from backend.season import _load_cache as _ind_cache
+    data = scan_twse()
+    ind_map = _ind_cache()
+    by_ind: dict[str, list] = defaultdict(list)
+    for code, d in data.items():
+        if d["prelim"] >= min_prelim:
+            by_ind[ind_map.get(code, "其他")].append((code, d))
+    rows = sorted(by_ind.items(), key=lambda kv: len(kv[1]), reverse=True)
+    lines = ["🛰️ 全市場缺貨粗篩（TWSE 免限流：量價齊揚）\n"]
+    for ind, members in rows[:12]:
+        members.sort(key=lambda x: (x[1]["prelim"], x[1]["rev_yoy"] or 0), reverse=True)
+        lines.append(f"━ {ind}（{len(members)} 檔量價齊揚）")
+        for code, d in members[:5]:
+            gm = f"{d['gross_margin']:.0f}%" if d['gross_margin'] is not None else "?"
+            yoy = f"{d['rev_yoy']:+.0f}%" if d['rev_yoy'] is not None else "?"
+            lines.append(f"    🔥 {code} {d['name']} [{d['prelim']}/4] 營收YoY{yoy} 毛利{gm}")
+    lines.append("\n粗篩=營收YoY>10/30(量) + 毛利>20/30%(價)；高分股建議再用 FinMind 精查合約負債/存貨")
+    return "\n".join(lines)
+
+
 # ── 快取（斷點續跑）─────────────────────────────────────────────────────────
 
 def _load_cache() -> dict[str, dict]:
@@ -290,6 +368,7 @@ def main() -> int:
     p.add_argument("--theme", choices=list(THEMES), help="掃缺料主題")
     p.add_argument("--all", action="store_true", help="全市場掃描（斷點續跑寫快取）")
     p.add_argument("--limit", type=int, default=None, help="與 --all 併用：本次最多掃幾檔（分批）")
+    p.add_argument("--twse", action="store_true", help="TWSE 全市場粗篩排行（免限流，量價齊揚）")
     p.add_argument("--rank", action="store_true", help="從快取出產業缺貨排行")
     p.add_argument("--refresh", action="store_true", help="與 --all 併用：清快取重掃")
     p.add_argument("--tg", action="store_true")
@@ -302,6 +381,16 @@ def main() -> int:
               f"剩餘 {stat['remaining']}" + ("，⚠️觸及限流可稍後再跑 --all 續接" if stat["rate_limited"] else ""))
         if stat["remaining"] == 0:
             print("✅ 全市場已掃完，可用 --rank 看排行")
+        return 0
+
+    # TWSE 全市場粗篩排行（免限流）
+    if args.twse:
+        report = twse_rank()
+        print(report)
+        if args.tg:
+            import asyncio
+            from backend.daily_signal import _send_telegram
+            asyncio.run(_send_telegram(report))
         return 0
 
     # 產業排行（從快取）
