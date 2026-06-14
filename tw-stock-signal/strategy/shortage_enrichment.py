@@ -89,10 +89,8 @@ class EnrichmentResult:
     # 存貨週轉
     inventory_yoy: float | None       # 存貨 YoY %
     inventory_flag: str               # "healthy_buildup"/"tight_supply"/"channel_stuffing"/"neutral"/"unknown"
-    # 綜合調整分
-    score_delta: int                  # -3 ~ +5
-    warnings: list[str] = field(default_factory=list)
-    boosts: list[str] = field(default_factory=list)
+    # 資訊標籤（純資料，不評分）
+    badges: list[str] = field(default_factory=list)
 
 
 # ── 1. 毛利率 ─────────────────────────────────────────────────────────────────
@@ -248,76 +246,60 @@ def enrich_shortage_signal(
     latest_monthly_revenue: float | None = None,
 ) -> EnrichmentResult:
     """
-    從三張寬格式財報 + P/E 資料計算增益結果。
-    所有 DataFrame 都可以是空的 — 優雅降級回傳 unknown。
+    從三張寬格式財報 + P/E 資料整理財務數據。
+    只整理資訊、不評分；讓使用者自己判斷。
 
     Args:
-        income_wide:           pivot_statement(fetch_income_statement())
-        cashflow_wide:         pivot_statement(fetch_cash_flow())
-        balance_wide:          pivot_statement(fetch_balance_sheet())
-        per_df:                fetch_per() 原始結果（非 pivot，有 PER 欄位）
-        revenue_yoy:           Phase 1 月營收 YoY %（用於存貨交叉驗證）
+        income_wide:            pivot_statement(fetch_income_statement())
+        cashflow_wide:          pivot_statement(fetch_cash_flow())
+        balance_wide:           pivot_statement(fetch_balance_sheet())
+        per_df:                 fetch_per() 原始結果（非 pivot，有 PER 欄位）
+        revenue_yoy:            Phase 1 月營收 YoY %（用於存貨交叉驗證）
         latest_monthly_revenue: 最新月營收千元（用於合約負債絕對量判斷）
     """
-    gm_pct,  gm_trend   = _gross_margin_analysis(income_wide)
-    cap_yoy, cap_flag   = _capex_analysis(cashflow_wide)
-    cl_yoy,  cl_flag    = _contract_liability_analysis(balance_wide, latest_monthly_revenue)
-    per_val, per_flag   = _pe_analysis(per_df if per_df is not None else pd.DataFrame())
-    inv_yoy, inv_flag   = _inventory_analysis(balance_wide, revenue_yoy)
+    gm_pct,  gm_trend = _gross_margin_analysis(income_wide)
+    cap_yoy, cap_flag = _capex_analysis(cashflow_wide)
+    cl_yoy,  cl_flag  = _contract_liability_analysis(balance_wide, latest_monthly_revenue)
+    per_val, per_flag = _pe_analysis(per_df if per_df is not None else pd.DataFrame())
+    inv_yoy, inv_flag = _inventory_analysis(balance_wide, revenue_yoy)
 
-    warnings: list[str] = []
-    boosts: list[str] = []
-    score_delta = 0
+    badges: list[str] = []
 
     # ── 毛利率 ────────────────────────────────────────────────────────────────
-    if gm_trend == "down":
-        warnings.append("毛利下滑 ⚠️ 疑似過水單")
-        score_delta -= 2
-    elif gm_trend == "up":
-        boosts.append("毛利擴張 ✅ 漲價確認")
-        score_delta += 1
+    if gm_pct is not None:
+        icon = {"up": "↑", "down": "↓", "flat": "→"}.get(gm_trend, "")
+        note = "（⚠️過水單風險）" if gm_trend == "down" else ""
+        badges.append(f"毛利{icon}{gm_pct:.0f}%{note}")
 
     # ── 買機台 ────────────────────────────────────────────────────────────────
-    if cap_flag == "expanding":
-        s = f"+{cap_yoy:.0f}%" if cap_yoy is not None else ""
-        boosts.append(f"大買機台 🏭{s}")
-        score_delta += 1
-    elif cap_flag == "shrinking":
-        warnings.append("Capex 縮減 ⚠️")
+    if cap_yoy is not None and cap_flag != "stable":
+        if cap_flag == "expanding":
+            badges.append(f"買機台 Capex +{cap_yoy:.0f}%")
+        elif cap_flag == "shrinking":
+            badges.append(f"Capex 縮 {cap_yoy:.0f}%")
 
     # ── 合約負債 ──────────────────────────────────────────────────────────────
-    if cl_flag == "strong":
-        s = f"+{cl_yoy:.0f}%" if cl_yoy is not None else ""
-        boosts.append(f"合約負債暴增 📋{s}（≥月營收2倍）")
-        score_delta += 1
-    elif cl_flag == "growing":
-        boosts.append("合約負債成長 📋")
+    if cl_yoy is not None and cl_flag in ("strong", "growing"):
+        suffix = "（≥月營收2倍）" if cl_flag == "strong" else ""
+        sign = "+" if cl_yoy >= 0 else ""
+        badges.append(f"合約負債 {sign}{cl_yoy:.0f}%{suffix}")
 
-    # ── 本益比（金律 2） ──────────────────────────────────────────────────────
-    # 便宜/甜蜜點給加分；高本益比「只提醒，不扣分」——
-    # 壟斷型龍頭本來就享有溢價，不能一刀切懲罰。
-    if per_flag == "cheap":
-        boosts.append(f"超低本益比 💎{per_val:.1f}x")
-        score_delta += 1
-    elif per_flag == "sweet_spot":
-        boosts.append(f"甜蜜本益比 🎯{per_val:.1f}x（10–15倍）")
-        score_delta += 1
-    elif per_flag == "expensive":
-        boosts.append(f"本益比偏高 ℹ️{per_val:.1f}x（注意估值）")
+    # ── 本益比 ────────────────────────────────────────────────────────────────
+    if per_val is not None:
+        note = {"cheap": "（偏低）", "sweet_spot": "（甜蜜點）",
+                "fair": "", "expensive": "（偏高）"}.get(per_flag, "")
+        badges.append(f"本益比 {per_val:.1f}x{note}")
 
-    # ── 存貨週轉（金律 4） ────────────────────────────────────────────────────
-    if inv_flag == "healthy_buildup":
-        boosts.append(f"健康備貨 📦存貨+{inv_yoy:.0f}%")
-        score_delta += 1
-    elif inv_flag == "tight_supply":
-        boosts.append("供應吃緊 🔥存貨縮減")
-        score_delta += 1
-    elif inv_flag == "channel_stuffing":
-        warnings.append(f"存貨塞貨地雷 ☠️+{inv_yoy:.0f}%")
-        score_delta -= 2
-    elif inv_flag == "over_stocked":
-        warnings.append(f"備料過頭 ⚠️存貨+{inv_yoy:.0f}%")
-        score_delta -= 1
+    # ── 存貨 ──────────────────────────────────────────────────────────────────
+    if inv_yoy is not None and inv_flag not in ("neutral", "unknown"):
+        label = {
+            "healthy_buildup":  "健康備貨",
+            "tight_supply":     "供應吃緊",
+            "channel_stuffing": "塞貨地雷⚠️",
+            "over_stocked":     "備料過頭",
+        }.get(inv_flag, "")
+        sign = "+" if inv_yoy >= 0 else ""
+        badges.append(f"存貨 {sign}{inv_yoy:.0f}%（{label}）")
 
     return EnrichmentResult(
         gross_margin_pct=gm_pct,
@@ -330,7 +312,5 @@ def enrich_shortage_signal(
         per_flag=per_flag,
         inventory_yoy=inv_yoy,
         inventory_flag=inv_flag,
-        score_delta=score_delta,
-        warnings=warnings,
-        boosts=boosts,
+        badges=badges,
     )

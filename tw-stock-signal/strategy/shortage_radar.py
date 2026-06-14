@@ -273,14 +273,8 @@ def apply_cascade_bonus(signals: list[ShortageSignal]) -> list[ShortageSignal]:
 
 
 def apply_enrichment(sig: ShortageSignal, enrichment: "EnrichmentResult") -> None:
-    """
-    Phase 2：將財報品質增益結果疊加到 ShortageSignal。
-    score 調整後仍限制在 1–7（最高 6 基礎 + 1 合約負債上限）。
-    直接 mutate sig。
-    """
+    """Phase 2：附上財報資訊標籤；不修改 score（評分由 Phase 1 月營收決定）。"""
     sig.enrichment = enrichment
-    sig.score = max(1, min(7, sig.score + enrichment.score_delta))
-    sig.grade = _grade(sig.score, cascade=sig.cascade_bonus)
 
 
 # 領先股判定：連續 N 個月 YoY > 20%（已爆發一段、股價可能已反應）
