@@ -600,6 +600,23 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 | Shioaji session 管理 | `reset_login()` 先 `api.logout()` 再清 Python 端 + atexit hook（§3.8 防 451/SIGSEGV） |
 | 探勘工具（保留備用）| `scripts/probe_aistockmap.py` / `probe_focus_dom.py` |
 
+### ⚠️ WebFetch 無法抓台灣財務網站（雲端 IP 被封鎖）
+
+Claude Code 的雲端執行環境 IP 屬於機房段，以下網站全部回傳 **403 Forbidden**：
+
+| 網站 | URL | 狀態 |
+|------|-----|------|
+| 財報狗 | statementdog.com | ❌ 403 |
+| Goodinfo | goodinfo.tw | ❌ 403 |
+| Yahoo Finance | finance.yahoo.com | ❌ 403 |
+| 公開資訊觀測站 MOPS | mops.twse.com.tw | ❌ 403 |
+| FinMind REST API | api.finmindtrade.com | ❌ 403 |
+
+**替代方案**：
+- 查個股財報 → 用 Telegram Bot `/history <代號>`（呼叫 FinMind API，在使用者本機執行）
+- 查月營收 → `/radar` 指令，或直接看財報狗 app
+- 需要 Claude 分析個股：**使用者截圖貼過來**，Claude 從圖片讀取數據分析（已驗證有效）
+
 ---
 
 ## 6. 怎麼維護這份檔案
