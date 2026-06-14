@@ -599,12 +599,13 @@ async def _cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         from strategy.shortage_enrichment import enrich_shortage_signal
         from scrapers.finmind.financials import (
-            fetch_income_statement, fetch_balance_sheet, fetch_cash_flow, pivot_statement,
+            fetch_income_statement, fetch_balance_sheet, fetch_cash_flow,
+            fetch_per, pivot_statement,
         )
         apply_cascade_bonus(shortage_signals)
         find_rotation_candidates(shortage_signals)
 
-        # Phase 2：對 score≥3 的候選股做財報品質驗證（買機台/毛利/合約負債）
+        # Phase 2：對 score≥3 的候選股做財報品質驗證（毛利/買機台/合約負債/本益比/存貨）
         top_candidates = [s for s in shortage_signals if s.score >= 3]
         if top_candidates:
             await thinking.edit_text(
@@ -617,17 +618,25 @@ async def _cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         async def _enrich_one(sig):
             async with enrich_sem:
-                inc, bal, cf = await asyncio.gather(
+                inc, bal, cf, per = await asyncio.gather(
                     fetch_income_statement(sig.symbol, years=3),
                     fetch_balance_sheet(sig.symbol, years=3),
                     fetch_cash_flow(sig.symbol, years=3),
+                    fetch_per(sig.symbol),
                     return_exceptions=True,
                 )
                 _empty = _pd.DataFrame()
-                inc_w = pivot_statement(inc) if not isinstance(inc, Exception) and not inc.empty else _empty
-                bal_w = pivot_statement(bal) if not isinstance(bal, Exception) and not bal.empty else _empty
-                cf_w = pivot_statement(cf) if not isinstance(cf, Exception) and not cf.empty else _empty
-                enrichment = enrich_shortage_signal(inc_w, cf_w, bal_w)
+                inc_w  = pivot_statement(inc) if not isinstance(inc, Exception) and not inc.empty else _empty
+                bal_w  = pivot_statement(bal) if not isinstance(bal, Exception) and not bal.empty else _empty
+                cf_w   = pivot_statement(cf)  if not isinstance(cf, Exception)  and not cf.empty  else _empty
+                per_df = per if not isinstance(per, Exception) and not per.empty else _empty
+                latest_rev = sig.revenue_trend[-1] if sig.revenue_trend else None
+                enrichment = enrich_shortage_signal(
+                    inc_w, cf_w, bal_w,
+                    per_df=per_df,
+                    revenue_yoy=sig.latest_yoy,
+                    latest_monthly_revenue=latest_rev,
+                )
                 apply_enrichment(sig, enrichment)
 
         await asyncio.gather(*[_enrich_one(s) for s in top_candidates], return_exceptions=True)

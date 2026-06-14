@@ -38,6 +38,15 @@ async def fetch_dividend(symbol: str, years: int = 5) -> pd.DataFrame:
     return await finmind.query("TaiwanStockDividend", symbol, _start(years))
 
 
+async def fetch_per(symbol: str, days: int = 30) -> pd.DataFrame:
+    """Fetch P/E ratio history from FinMind (TaiwanStockPER)."""
+    start = (date.today() - timedelta(days=days)).isoformat()
+    df = await finmind.query("TaiwanStockPER", symbol, start_date=start)
+    if df.empty:
+        logger.warning(f"[fundamental] {symbol} PER 資料為空")
+    return df
+
+
 def pivot_statement(df: pd.DataFrame) -> pd.DataFrame:
     """把 FinMind 的長格式 (date,type,value) 轉成寬格式 (date × type)。"""
     if df.empty or not {"date", "type", "value"}.issubset(df.columns):

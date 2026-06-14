@@ -526,6 +526,46 @@ async def shortage_radar_job() -> None:
 
         apply_cascade_bonus(signals)
         find_rotation_candidates(signals)
+
+        # Phase 2：對 score≥3 候選做財報品質驗證
+        from scrapers.finmind.financials import (
+            fetch_income_statement, fetch_balance_sheet, fetch_cash_flow,
+            fetch_per, pivot_statement,
+        )
+        from strategy.shortage_radar import apply_enrichment
+        from strategy.shortage_enrichment import enrich_shortage_signal
+        import pandas as _pd
+
+        enrich_sem = asyncio.Semaphore(2)
+
+        async def _enrich_radar(sig):
+            async with enrich_sem:
+                inc, bal, cf, per = await asyncio.gather(
+                    fetch_income_statement(sig.symbol, years=3),
+                    fetch_balance_sheet(sig.symbol, years=3),
+                    fetch_cash_flow(sig.symbol, years=3),
+                    fetch_per(sig.symbol),
+                    return_exceptions=True,
+                )
+                _empty = _pd.DataFrame()
+                inc_w  = pivot_statement(inc) if not isinstance(inc, Exception) and not inc.empty else _empty
+                bal_w  = pivot_statement(bal) if not isinstance(bal, Exception) and not bal.empty else _empty
+                cf_w   = pivot_statement(cf)  if not isinstance(cf, Exception)  and not cf.empty  else _empty
+                per_df = per if not isinstance(per, Exception) and not per.empty else _empty
+                latest_rev = sig.revenue_trend[-1] if sig.revenue_trend else None
+                enrichment = enrich_shortage_signal(
+                    inc_w, cf_w, bal_w,
+                    per_df=per_df,
+                    revenue_yoy=sig.latest_yoy,
+                    latest_monthly_revenue=latest_rev,
+                )
+                apply_enrichment(sig, enrichment)
+
+        top = [s for s in signals if s.score >= 3]
+        if top:
+            logger.info(f"[radar] Phase 2 enrichment for {len(top)} candidates")
+            await asyncio.gather(*[_enrich_radar(s) for s in top], return_exceptions=True)
+
         ranked = rank_signals(signals)
         clusters = find_clusters(ranked)
         logger.info(f"[radar] {len(ranked)} shortage signals ({sum(1 for s in ranked if s.score >= 4)} 強缺貨)")
