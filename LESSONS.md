@@ -4,12 +4,26 @@
 > Claude 每次開新對話前必須先讀這份檔案，避免重複踩坑、保留前後文。
 > 使用者要更新只要說：「把 OOO 記到 LESSONS.md」。
 
-**最後更新**：2026-05-17（凌晨 — Crypto SMC 跨樣本驗證，發現 N-Pattern 是唯一可信 setup）
-**對應 git commit**：**04b5a38**（feat: 當沖系統第一版閉環）+ backtest 優化 + crypto 驗證未提交
+**最後更新**：2026-06-14（鑽豹第三刀技術檢核 + 接入 07:00 盤前報告 + ⚠️ 兩支 bot 架構釐清 §1.5）
+**對應 git commit**：**04b5a38**（feat: 當沖系統第一版閉環）+ backtest 優化 + crypto 驗證 + OBV 背離 PoC + 批量驗證未提交
 
 ---
 
 ## 1. 程式碼 / 工程決策
+
+### 1.0 環境坑（2026-06-13）
+
+| 坑 | 症狀 | 根因 | 對策 |
+|---|---|---|---|
+| **venv 未啟動** | `ModuleNotFoundError: No module named 'pandas'` | 用了系統 Python 而非 tw-stock-signal venv | 每次開終端機先跑 venv 啟動指令；所有 `backend/` 腳本頂端加 `env_guard.require(...)` 早期中止 |
+| **yfinance 新版 API** | `'str' object is not callable` | `yf.download()` 在 ≥0.2.x 行為改變 | 改用 `yf.Ticker(ticker).history()` — 跨版本穩定；`layer_a.py` 已採用此寫法 |
+
+**venv 啟動指令**（每次開新終端機都要跑）：
+```
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& 'c:\Users\sfudally\Desktop\code test\tw-stock-signal\.venv\Scripts\Activate.ps1')
+```
+
+---
 
 ### 1.1 A1 加入 C7d Order Block 過濾
 - **來源**：commit b15382d
@@ -31,9 +45,58 @@
 - **setups**：sweep_reversal / ob_continuation / premium_fade / breaker / 等
 - **道理**：每個 setup 寫成 pure function 方便回測 + 單元測試
 
+### 1.4 鑽豹第三刀技術檢核（2026-06-14）
+- **位置**：`backend/diamond_blade3.py`（純標準庫 + requests，FinMind 日K）
+- **三條件**（照《鑽豹三刀流》第3章書本定義）：
+  1. **均線多頭排列** = MA5>10>20>60 且股價站上 MA5
+  2. **MACD** = DIF>0 且柱>0（零軸上方）；剛由負轉正標 🔥金叉
+  3. **乖離率** = 短期(6日)BIAS 平均線 > 長期(24日) 且當日 BIAS>0；剛上穿標 🔥金叉
+- **接點**：已嵌入 `morning_report.generate()` 第四段，07:00 盤前報告自動掃「8 檔固定追蹤清單 + 今日大漲前6名」
+- **用法**：`python -m backend.diamond_blade3 [代號...] [--tg]`
+- **定位**：第三刀是「加碼確認」訊號，需配第一刀(賺賠比)+第二刀(基本面)，不可單獨進場
+- **環境坑**：`venv/Scripts/python.exe` **沒有** requests/pandas；要用系統 Python `C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe`（有 requests+pandas+bs4）。morning_report / diamond_blade3 都要用系統 Python 跑
+
+### 1.5 ⚠️ 兩支獨立 Telegram bot — 動 bot 前務必先分清（2026-06-14）
+
+> **這條最容易踩坑。任何「重啟 / 套用報告 / 改排程」的需求，先讀這條再動手。**
+
+專案有 **兩支完全獨立的 Telegram bot**，用 **不同 token**，可同時常駐不衝突：
+
+| Bot | 啟動方式 | Token | 負責什麼 | 07:00 做什麼 |
+|-----|---------|-------|---------|-------------|
+| **tw-stock-signal** | `tw-stock-signal/main.py --daemon`（→ `notifier/bot_handler.py` + `scheduler/daily_job.py`） | `TELEGRAM_BOT_TOKEN=879224...` | 台股訊號排程、抓資料入 DuckDB | **fetch_job 抓資料**（與鑽豹報告無關） |
+| **backend/smc_bot** | `python -m backend.smc_bot`（用系統 Python313） | `SMC_TELEGRAM_BOT_TOKEN=850902...`（在 `smc_bot.py:124` 優先讀此，特意分開避免衝突） | **鑽豹盤前報告**、台指期 daily_signal、第三刀、N-pattern watcher | **`_job_morning_report` 鑽豹盤前報告（含第三刀）** |
+
+**判斷規則**：
+- 需求若提到 **鑽豹盤前報告 / morning_report / diamond_blade3 / 台指期 /txf / 第三刀** → 動的是 **`backend/smc_bot`**
+- 需求若提到 **台股每日訊號排程 / 抓盤後資料** → 動的是 **tw-stock-signal daemon**
+
+**踩過的坑（2026-06-14）**：使用者說「重啟 bot 套用新報告」，當下在跑的只有 tw-stock-signal daemon（PID 用 `Get-CimInstance` 查 CommandLine 確認）。差點誤重啟它——但它根本不含鑽豹報告。真相是 `backend/smc_bot` **從未常駐跑過**，需首次啟動。
+
+**啟動 / 重啟 backend/smc_bot 標準步驟**：
+```
+# 1. 查現有程序（看 CommandLine 才能分辨是哪支）
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? {$_.CommandLine -like '*smc_bot*'} | Select ProcessId,CommandLine
+# 2. 若有舊的先 Stop-Process -Id <pid>
+# 3. 用系統 Python 背景啟動
+C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.smc_bot
+# 4. 讀 log 確認：'SMC bot polling …' + 'Application started' + 'Added job "_job_morning_report"'
+```
+- 因兩支 token 不同，啟動 smc_bot **不會** 影響 tw-stock-signal daemon（不會 409 Conflict）。
+- 同一支若重複啟動才會 409（同 token 兩個 polling）。
+
+**`--tg` 送訊息一律走 SMC bot（2026-06-14 統一）**：
+- `daily_signal._send_telegram` 已改為優先讀 `SMC_TELEGRAM_BOT_TOKEN` / `SMC_TELEGRAM_CHAT_ID`（fallback 才用舊的 `TELEGRAM_*`）。
+- 因此 `morning_report --tg` / `daily_signal --tg` / `diamond_blade3 --tg` 全部從 **SMC bot（850902）** 發，與 07:00 排程 `_job_morning_report` 同一支，來源一致。
+- **不要改回 `TELEGRAM_BOT_TOKEN`**，否則手動與排程會變兩支不同 bot、使用者收到不同對話視窗的重複訊息。
+
 ---
 
 ## 2. ⭐ 2026-05-16 — 雷老闆面談後的策略升級【最新、最重要】
+
+> 📖 **雷老闆「書摘」型態學/進出場/紀律 → 見獨立檔 [`雷老闆心法.md`](雷老闆心法.md)**
+> 做型態判斷、進出場、寫分析時**必須對照該檔**（W底/M頭/三角收斂、頸線停損、實體K確認、方向確立後才進場）。
+> 本節 §2 = 面談「選股哲學」；`雷老闆心法.md` = 書摘「進出場型態」，兩者互補。
 
 ### 2.1 雷老闆 5 個核心原則（過濾完逐字稿後的精華）
 
@@ -245,6 +308,37 @@
 - [ ] 開盤前 15 分鐘 cron 推「禁止交易、等 N 字 watcher」提醒
 - [ ] 復實盤條件達標時自動推「✅ 達標、可考慮回實盤」
 
+### 2.7.5b ⚠️ 2026-05-26 — 使用者提前破規回實盤
+
+**狀態變更**：使用者明示「現在開始恢復交易」、選擇「明知未達標、仍要回實盤」。
+
+**與原規則衝突**（§2.7.5 紙上模擬期條件，**全部未達**）：
+
+| 條件 | 規則 | 2026-05-26 現況 |
+|---|---|---|
+| 模擬期長度 | 至少到 2026-06-20 | 才 6 天（離規則差 25 天） |
+| 勝率 ≥ 50% | 未驗證 | 樣本太小（§2.8.4 證 30 天都不可信） |
+| 期望值 > 0 | 未驗證 | 同上 |
+| 紀律執行率 ≥ 95% | 未驗證 | 距 §2.7.4c 失控事件僅 6 天 |
+
+**Claude 已盡告知義務**：把規則差距、§2.7.4c 失控事件、樣本不足全部攤開給使用者選；使用者仍選破規。
+
+**仍然強制生效（不因破規而豁免）**：
+- §2.7.4b 進場前 4 條鐵則（bot 推、寫停損、虧 < 2%、≤ 3 筆）
+- §2.7.4c 風險預算（單筆 ≤ 4,000 / 日 ≤ 8,000 / 年 ≤ 80,000 bright line）
+- §2.7.4c 禁止行為（套牢加碼、凹單、同檔反向）
+- §2.7.4c FOMO 對抗 3 機制（9:00-9:15 禁、不進就記錄、只看 watchlist）
+
+**自動煞車條件（Claude 下次對話主動提醒）**：
+- 單日虧損 ≥ 8,000 → 提醒當天收工
+- 連續 3 個交易日虧損 → 提醒回模擬
+- 觸年度 -80,000 → 提醒**停玩**（bright line）
+- 連續 5 天紀律執行率 < 95%（≥ 1 筆違反 §2.7.4b）→ 提醒回模擬
+
+**檢視點**：2026-06-26（實盤滿 1 個月）做「實盤紀律執行率盤點」— 不是看賺賠，是看執行率。執行率 < 95% 即使賺錢也要回模擬。
+
+---
+
 ### 2.7.6 已刪除的舊指令（2026-05-20）
 
 舊版 in-memory watchlist 系統（`/smc_watch` `/smc_unwatch` `/smc_list` `/smc_start` `/smc_stop`）已被持久化版本（`/wl` `/wl_add` `/wl_del` `/wl_clear` + 自動 cron）取代、5 個指令刪除：
@@ -398,6 +492,301 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 
 ---
 
+## 2.9 ⚠️ 兩個系統的職責分工（不要混淆 / 不要合併）【2026-05-26】
+
+**現況**：`backend/` 和 `tw-stock-signal/` 是**兩個並存系統，不是 legacy + new**，不要嘗試合併或互相搬程式碼。
+
+| 系統 | 用途 | 資料源 | 週期 | Telegram bot token |
+|---|---|---|---|---|
+| **backend/** | 盤中即時 SMC 訊號（N 字 / OB / DB approach）+ 紙上模擬倉監控 | Shioaji M3 即時 | 每 3 分鐘輪詢 | `SMC_TELEGRAM_BOT_TOKEN` |
+| **tw-stock-signal/** | 盤前 daily 訊號 + 三層基本面分析 + 量縮 vol_shrink | FinMind daily | 每天 07:00-08:00 跑一輪 | `TELEGRAM_BOT_TOKEN` |
+
+**為什麼不合併**：
+- FinMind 免費 tier 不支援分鐘 K（§3.1）→ tw-stock-signal 若改盤中即時必須換 Shioaji
+- 但 Shioaji 即時 + N-Pattern watcher 已經在 backend/ 完整實作（§2.7.6）
+- 合併 = 把 backend/ 已有的整套重寫一次到 tw-stock-signal/，純浪費工
+
+**backend/ 盤中即時是 A+B+C 三件齊的完整證據**（2026-05-26 對話中逐行驗證）：
+- A+B+C = 拉新大盤 / 拉新個股 / 重算 signal 並推播
+- `smc_bot.py:749` `app.job_queue.run_repeating(_job_watcher, interval=180, first=30)` — 每 3 分鐘 cron
+- `smc_bot.py:357-361` 時間閘：`weekday<5` AND `hour∈[9,14)`（盤後/週末跳過、不浪費 API）
+- `_run_watcher_pass:321` `await gather_context(symbol)` 對 watchlist 每檔現拉
+- `context.py:40` `_CACHE_TTL_SECONDS=30`（< cron 180s → 每輪都會重拉，不會吃過期 cache）
+- `_run_watcher_pass:325-326` 跑 `evaluate_first_beat` / `evaluate_db_approach` / `evaluate_ob_formation` 三個 setup
+- `:335` 推 Telegram，搭配 60 分鐘 `alert_state.should_push` dedup（防 FOMO 轟炸）
+- `:369` 同輪順便跑 `sim_check_positions()` → stop/target 觸發自動結算 + 推播
+
+**規則（未來新需求落腳處）**：
+- 「盤中即時 / setup watcher / 即時推播」功能 → **加在 backend/**
+- 「盤前 daily / 基本面 / chip 分析 / 量縮 vol_shrink」功能 → **加在 tw-stock-signal/**
+- 共用：兩邊都用 `data/day_trade_watchlist.json`（當沖 watchlist），其他資料各自管理
+
+**反 pattern（不要犯）**：
+- ❌ 「在 tw-stock-signal 加盤中即時化」— 會撞 FinMind paywall + 重做 backend/ 已有的
+- ❌ 「把 backend/ 的 N-Pattern watcher 搬到 tw-stock-signal」— 兩邊 bot token 不同、entry point 不同、會 409 Conflict
+
+---
+
+## 2.10 ⭐ 2026-06-03 — OBV × 籌碼集中度背離偵測 PoC【最新】
+
+### 2.10.1 背景與架構決策
+
+收到 master prompt 要做「OBV ↑ + 籌碼集中度 ↓」背離偵測（主力疑似出貨警示，純警示不下單），原規劃要做盤後 + 盤中兩種推播。
+
+**架構決策**（依 §2.9 規則）：
+- ✅ **只做盤後版**，放 `tw-stock-signal/`
+- ❌ **盤中即時版降為 P2**（時間框架矛盾：集中度本質 T+1 才有，「昨日集中度 + 今日 OBV」訊號品質低）
+- ❌ **不在 tw-stock-signal 接 Shioaji 即時**（撞 FinMind paywall §3.1 + 重做 backend/ 已有的 cron watcher）
+
+### 2.10.2 ⚠️ 重要踩坑（會影響後續決策）
+
+**坑 1：FinMind 免費 tier 不能當集中度資料源**
+- `scrapers/finmind/shareholding.py` docstring 明寫：`TaiwanStockShareholding` 在免費 tier **沒有 `HoldingSharesLevel` / `HoldingSharesProportion` / `NumberOfShareholders`** → 拿不到大戶持股比例
+- chip.py `_shareholding_stats` 拿到空 DataFrame 就回 `-1`、H5 自動豁免 → 現有系統根本沒在用真實大戶集中度
+- **教訓**：以後新增任何依賴「真集中度」的策略不能假設 FinMind 給得了
+
+**坑 2：HiStock 真正的集中度頁面 URL 是 `chartdata.aspx`，不是 `concentrate.aspx`**
+- 試打 `https://histock.tw/stock/concentrate.aspx?no=2330` → 404
+- 真正的 chip 頁是 `chips.aspx?no=2330`（HTML 127KB，含 Highcharts 內嵌資料）
+- 但更乾淨的是 AJAX endpoint `chips.aspx` 內 line 890 引用的：
+  ```
+  https://histock.tw/stock/chip/chartdata.aspx?no={sid}&m={comma-separated-metrics}
+  ```
+- 直接回 JSON（44KB），不用爬 HTML
+
+### 2.10.3 HiStock chartdata.aspx 介面實錄
+
+**請求**（必要 headers）：
+- `User-Agent`: 設一般瀏覽器即可
+- `Referer`: `https://histock.tw/stock/chips.aspx?no={sid}`（保險加，未驗證沒加會不會被擋）
+- `X-Requested-With`: `XMLHttpRequest`（AJAX 慣例）
+
+**Metric keys**（可用 `m=` 逗號分隔組合）：
+```
+dailyk, Close, Volume,
+mean5, mean10, mean20, mean60, mean120, mean240,
+mean5volume, mean20volume,
+broker1, broker3, broker5, broker10,   # 主力買賣超 (1/3/5/10 日)
+chip1,   chip3,   chip5,   chip10,     # 籌碼差
+focus1,  focus3,  focus5,  focus10     # 籌碼集中度 (1/3/5/10 日, %)
+```
+
+**Response 結構**：
+```json
+{
+  "Close":   "[[unix_ms, price], ...]",   // capitalized!
+  "Volume":  "[[unix_ms, lots], ...]",    // capitalized!
+  "focus5":  "[[unix_ms, pct], ...]",     // lowercase!
+  "focus10": "[[unix_ms, pct], ...]"
+}
+```
+- ⚠️ key 大小寫不一致：`Close`/`Volume` 是 capitalize，`focus5` 等是 lowercase
+- ⚠️ value 是 **JSON string**，要 `json.loads(d["focus5"])` 再次 parse（不是 nested array）
+- 大約 250 個交易日歷史可拉，z-score 樣本充足
+
+**HiStock 沒有 `focus20`** — PoC 用 `focus10` 代理 CONC_20，未來需要可從 `broker1` 自己 rolling 20。
+
+### 2.10.4 PoC 指標公式（已實作）
+
+```
+OBV          = 標準累積 OBV from close + volume
+OBV_smooth   = EMA(OBV, span=5)
+CONC_5       = HiStock focus5 (5 日 rolling 主力買賣超 / 量, %)
+CONC_smooth  = EMA(CONC_5, span=5)
+OBV_slope    = linregress(最近 5 天 OBV_smooth).slope
+CONC_slope   = linregress(最近 5 天 CONC_smooth).slope
+
+歷史窗口 60-120 天：
+  >= 60 → z-score
+  <  60 → 百分位法 (排序中心化到 [-2, 2])
+
+分級：
+  weak    : OBV_z > 0    且 CONC_z < 0
+  medium  : OBV_z > 0.5  且 CONC_z < -0.5
+  strong  : OBV_z > 1.0  且 CONC_z < -1.0
+  confirmed: 連續 K=2 天 >= medium
+```
+
+### 2.10.5 PoC 驗證結果（180 天歷史、2026-06-03 跑）
+
+| 標的 | weak | medium | strong | confirmed(K=2) | total | 訊號率 / 月 |
+|---|---|---|---|---|---|---|
+| 2330 台積電 | 13 | 2 | 2 | **2** | 116 | ~0.4 次 |
+| 2382 廣達 | 12 | 7 | 0 | **5** | 116 | ~1 次 |
+
+- 訊號頻率落在合理區（不 spam、不死訊號），門檻先不調
+- **2330 04-22~04-29 連續訊號**（04-24 medium）→ 5/04-5/22 OBV 持續下跌 → 事後看具預警價值
+- 2382 訊號量多但無 strong，對應 §3.2「2382 整體期望值 -0.17」的波段不穩特性
+- z-score 路徑全部啟用（前 60 筆走 percentile 退路、後 56 筆走 z-score）
+
+### 2.10.6 新增檔案位置
+
+```
+tw-stock-signal/scrapers/concentration/__init__.py
+tw-stock-signal/scrapers/concentration/base.py        # ConcentrationDataSource Protocol
+tw-stock-signal/scrapers/concentration/histock.py     # HiStock JSON adapter
+tw-stock-signal/strategy/obv_divergence.py            # OBV + 集中度 + z-score + 分級 + 確認
+tw-stock-signal/scripts/probe_histock.py              # PoC HTML probe（已執行）
+tw-stock-signal/scripts/probe_histock_api.py          # PoC JSON probe（已執行）
+tw-stock-signal/scripts/poc_obv_divergence.py         # PoC 回測 script（已執行）
+tw-stock-signal/scripts/poc_data/*.html / *.txt       # probe 留檔
+```
+
+**沒動的東西**：`backend/` 整個資料夾、`tw-stock-signal/` 既有檔案、DuckDB schema、Telegram bot、APScheduler。
+
+### 2.10.7 下一步待做（按順序）
+
+- [x] **Premium Zone 確認層** ✅ 2026-06-03 已實作於 `obv_divergence.py::_compute_price_zones`（rolling 20 日 close max/min 取中點，confirmed 訊號要求 `persist_flags AND zone == PREMIUM`）
+- [x] **跨 7 檔批量驗證** ✅ 2026-06-04 完成（見 §2.10.9）— 結果 OK，可進下一階段
+- [ ] **CONC_20 用 focus10 代理 vs 從 broker1 自己 rolling 20**：對比同期訊號差異
+- [ ] **DuckDB 表 + APScheduler 14:45 cron + Telegram 推播**：批量驗證已過，可開始做
+
+### 2.10.8 已決議不做的事
+
+- ❌ HiStock 不寫 fallback adapter（PoC 一次就通、無付費需求、無反爬蟲）
+- ❌ FinMind 不升付費 tier（拿到 `major_holder_ratio` 也只是另一種代理、不是真分點集中度）
+- ❌ 盤中即時版不做（時間框架矛盾、§2.9 規則阻擋）
+
+### 2.10.9 ⭐ 2026-06-04 — 跨 7 檔批量驗證結果
+
+**目的**：驗證 §2.10.5 的「訊號頻率合理」是不是只在 2330/2382 成立（避免 PoC 過擬合 2 檔特例）。
+
+**新檔案**：`tw-stock-signal/scripts/poc_obv_divergence_batch.py`
+**輸出**：`tw-stock-signal/reports/obv_divergence_batch_20260604.csv`
+
+**結果（180 天歷史）**：
+
+| Symbol | weak | medium | strong | confirmed | confirmed/月 | LESSONS §3.2 WR |
+|---|---|---|---|---|---|---|
+| 2330 台積電 | 12 | 3 | 1 | 2 | 0.3 | 25.8% |
+| 2317 鴻海 | 9 | 7 | 0 | 5 | 0.8 | 44.5%（最佳） |
+| 2308 台達電 | 14 | 5 | 7 | **10** | **1.7** | 25.2% |
+| 2382 廣達 | 11 | 6 | 0 | 4 | 0.7 | 7.7%（最差） |
+| 2454 聯發科 | 10 | 3 | 4 | 4 | 0.7 | 42.4% |
+| 2449 京元電子 | 7 | 3 | 2 | 2 | 0.3 | — |
+| 3231 緯創 | 12 | 3 | 1 | 2 | 0.3 | — |
+
+**4 個發現**：
+
+1. ✅ **訊號率分布合理**（多數 0.3-0.8 次/月、無 spam、無死訊號）。Premium Zone gate 有效（所有 `last_zone=premium`，代表 Discount 區的背離都被擋住）
+2. ⚠️ **2308 訊號量太多**（1.7 次/月、7 個 strong）→ 跟 §3.2「2308 R:R 29.43 但 WR 25.2%、停損太遠」可能同源（標的本身波動率特性 + 籌碼結構）。不一定是 indicator 問題、但**單一標的需要更高門檻或加上額外確認層**
+3. ⭐ **2317 5/14-5/19 連續 4 天 confirmed、5/19 仍是 weak/premium**（最新狀態仍在發生）→ 過去 backtest WR 最佳的鴻海此刻疑似主力出貨、**未來 1-2 週可拿來事後驗證 indicator 是否真有預警價值**
+4. 📍 **2026-04-17 → 04-21 群聚訊號**（2308/2382/3231 同時 confirmed）→ 大盤級事件、不是個股特性。indicator 對大盤級轉折有反應 = 良性訊號
+
+**結論**：可以進下一階段（DuckDB 落地 + APScheduler 14:45 cron + Telegram 推播）。
+
+**追蹤事項**：
+- [ ] 約 2026-06-19（2317 訊號後 1 個月）回頭看 2317 股價走勢、驗證此次 confirmed 訊號是否有預警價值
+- [ ] 2308 是否單獨調高門檻、或留作 indicator 自然頻率高的特例
+
+---
+
+## 2.11 ⭐ 2026-06-08 — 盤末漲幅榜推播（12:30/13:00/13:30）
+
+**需求**：使用者要在 12:30 / 13:00 / 13:30 收到「今日漲幅 ≥ 5% 的股票」清單。
+
+**架構決策**（依 §2.9）：盤中即時推播 → 加在 **`backend/`**（Shioaji + `SMC_TELEGRAM_BOT_TOKEN` + JobQueue）。
+- 掃描範圍使用者選 **只上市 (TSE)**（不含上櫃）。
+- 用 **`api.snapshots()` 批次抓即時報價**（不是逐檔 K 線）→ 只需 Data 權限、約 3 個 batch 跑完全上市，避開 §3.8 連線累積。
+- 過濾普通股：`code` 4 碼純數字且首碼非 0（排除 ETF 00xx / 權證 6 碼 / 特別股帶字母）。
+- 假日防呆：snapshot 全市場 `total_volume==0` → `market_active=False` → 不推誤導訊息。
+
+**新增/改動**：
+- `shioaji_fetcher.py`：`shioaji_scan_gainers()` + `Gainer`/`GainerScan` dataclass + `_sync_scan_gainers` / `_tse_common_contracts`
+- `smc_bot.py`：`_job_gainers` / `_format_gainers` + `/gainers` 手動指令 + 3 個 `run_daily`（台北時間，weekday guard 在 callback 內）
+
+**⚠️ 與 §2.7.4c FOMO 原則的張力**：這是「全市場掃描」，違反「只看 watchlist」。**合理化理由**：12:30+ N 字進場窗口（09:30-12:30）已過，此清單定位為**盤末強勢股回顧 → 明日備課素材**，非當下追高訊號。未來若發現使用者拿它盤中追價，需重新評估。
+
+**踩到的環境坑（重要、會影響下次）**：
+1. **專案實際 interpreter = global Python 3.13**（`C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe`，裝有 pandas / shioaji 1.3.3 / python-telegram-bot 22.7）。**專案根 `venv/` 是空殼，別用**（會 `ModuleNotFoundError: pandas`）。
+2. **Shioaji 登入會被 IP 白名單擋**：2026-06-08 首次實測回 `{'status_code':400, ... 'detail':'ip: <IP> not allow.'}`。換機器 / 動態 IP 變動後，必須先到永豐 API 後台把新 IP 加白名單，否則 bot 所有 Shioaji 抓資料都會失敗。→ **換新 key 後同日已實連驗證通過**：1082 檔上市普通股、`change_rate` 確認是百分比（門檻 5.0=5% 正確）、當日掃到 24 檔漲 ≥5%（和桐/嘉聯益 +10% 漲停等、股名正確解析）。
+3. **既有 PII log 洩漏**（非本次引入、暫不修）：`shioaji_fetcher._get_api()` 的 `logger.warning("Shioaji login failed: %s", exc)` 會把 shioaji 原始例外（含 `person_id` 身分證號 + IP）印到 server log。§3.7 的濾鏡只擋 Telegram，沒擋 log。要修的話 login except 也該套 `_sanitize` 類過濾。
+
+**部署 / 啟動（2026-06-08 釐清，重要）**：
+- **smc_bot 啟動方式 = `python -m backend.smc_bot`**（用 global Python 3.13）。新增 `啟動SMC機器人.bat`（雙擊即可，崩潰自動 5 秒重啟，log 寫到 `%TEMP%\smc_bot.log`）。**這支之前沒 auto-restart**，§3.8 SIGSEGV 崩了就沒了 → 使用者「看不到指令」常是因為 smc_bot 根本沒在跑。
+- **⚠️ 兩支 bot 別搞混**（接續 §2.9）：`/gainers` 等盤中指令在 **smc_bot**（`SMC_TELEGRAM_BOT_TOKEN`，是 Telegram 上**另一支** bot）；每天 07:00 盤前報告那支是 `tw-stock-signal/main.py --daemon`（`TELEGRAM_BOT_TOKEN`，由 `start_daemon.bat` 跑）。使用者要在「SMC 那支 bot 的對話」裡才看得到 `/gainers`。兩支 token 不同所以可並存（同 token 才 409）。
+- **.bat 坑**：cmd `.bat` 裡放太多中文 echo 行會卡住解析、走不到 python 那行（python 進程根本沒生出來）。修法：`.bat` 內容盡量 ASCII + `chcp 65001`，python 輸出用 `>> "%TEMP%\smc_bot.log" 2>&1` 導出（視窗留給使用者、log 留給除錯）。
+
+---
+
+## 2.12 ⭐ 2026-06-09 — `/scan` 當沖選股篩選器（交易紀律程式化）
+
+**需求**：使用者給一套當沖進場紀律，要寫進 Telegram bot。**決策（AskUserQuestion）**：範圍＝客觀篩選 + 量化型態；量能基準＝前 20 日均量 ×1.5。
+
+**實作**：`backend/momentum_scan.py`（純函式 + dataclass）+ smc_bot `/scan`。
+
+| 紀律 | 實作 | 類型 |
+|---|---|---|
+| 1 大盤環境 | 全股 snapshot 算上漲家數占比 breadth（≥50%偏多 / <40%偏空），不另抓指數 | soft（偏空標⚠️不硬擋）|
+| 2 漲幅≥5% | snapshot change_rate ≥ 5 | 硬篩 |
+| 3 均線多頭未發散 | 日 MA5≥MA10≥MA20≥MA60 且 (close-MA20)/MA20 ≤ 12% | 硬篩 |
+| 4 量能 | 今日量 ≥ 前20日均量 ×1.5 | 硬篩 |
+| 三角收斂/盤整 | 均線帶寬/MA20 ≤5%(糾結) + ATR5<ATR20(波動收縮) | 加分 |
+| 區間突破 | close > 前20日最高 | 加分 |
+| 月/週/日 | 日線 resample 週(MA5/20)/月(MA3/6) 各報多頭/盤整/空頭 | 顯示+加分 |
+
+型態分 0–5 = 糾結+收縮+破20日高+週多頭+月多頭，依分排序。
+
+**⚠️ 刻意不做**：杯柄/嚴格三角等**圖形辨識不自動做**（主觀易誤判，非技術使用者會誤信 → §2.7.4c「紀律外包給 bot」風險）。只給可量化近似 + 三週期狀態，圖形留使用者人工判。要加圖形辨識前先想清楚誤判責任。
+
+**驗證（2026-06-09 實連，06-08 收盤資料）**：掃 1082、漲87/跌970→偏空、漲幅≥5% 24 檔→過四關 1 檔（6153 嘉聯益 +10% 量4.3× 月週日全多頭）。有鑑別力、不照單全收。
+
+**效能/調參**：snapshot 全市場 + 漲幅前 40 檔(`DEEP_LIMIT`)逐檔日線(260 根)，~30-40s，在 thread 跑不阻塞。門檻常數全在 `momentum_scan.py` 頂部（`MIN_CHANGE_PCT`/`VOL_MULT`/`MA_CONVERGED_MAX`/`EXTEND_MAX`/`BREAKOUT_LOOKBACK`/`BREADTH_*`）。
+
+**量單位確認**：日線 K 棒 volume 與 snapshot total_volume 同單位（張），量能比可直接算（2330 兩者皆 ~44,000 驗證）。
+
+---
+
+## 2.13 ⭐ 2026-06-10 — 鑽豹評鑒 + 本益比合理價 + 拉回整理檢查（三合一研究工具）
+
+**需求**：使用者要 (a) 鑽豹評鑒（財報 6 面向 15 分、高分自動記錄）(b) 合理股價=預估EPS×本益比 (c) 拉回整理股篩選（週/月線、離高點有距離）。全部進 smc_bot。
+
+**新模組**：`backend/diamond_score.py` / `pe_valuation.py` / `pullback_check.py`；指令 `/dia [codes]`（無參數=看記錄）/ `/pe code [自估EPS]` / `/pullback [codes]`（無參數=鑽豹記錄+watchlist）。
+
+**鑽豹計分（15 = 3+2×6）**：營收3（月YoY>0／近3月累計YoY>10%／創12月新高）；毛利率2、營業利益率2、EBITDA率2（各 QoQ↑/YoY↑）；存貨2（QoQ↓／存貨YoY<營收YoY）；合約負債2（恆 0，見下）；FCF2（最新季>0／近4季累計>0）。≥10 分自動記 `data/diamond_picks.json`（原子寫入、同 code 覆蓋）。
+
+**⚠️ 資料源限制（已實測確認）**：
+1. **FinMind 免費版資產負債表沒有合約負債**（101 個 type 全列過，無 Contract/預收類）→ 該項恆 0 分、訊息標「無資料」。實際滿分 13。
+2. **TaiwanStockPER 全市場單日查詢=付費牆** → 產業中位 PE 無法自動算（逐檔拉同業會爆免費額度）。`/pe` 改用個股自身 5 年 PE P25/P50/P75 當保守/合理/樂觀，產業欄只顯示分類名。
+3. **TaiwanStockInfo 一檔可能多個產業分類**（2330＝電子工業+半導體業）。
+
+**⚠️ 最重要的坑：現金流量表是「年內累計制」**（Q2=上半年累計、Q4=全年累計、隔年 Q1 重置；2330 實測確認）。直接拿 row 加總/比較會嚴重失真（修正前 2330「近4季FCF」算出 24,793,261 億的笑話）。修法：`diamond_score._decum()` 同年內後季減前季還原單季。**損益表(TaiwanStockFinancialStatements)是單季值**（EPS TTM=74.39 與台積電真實值吻合驗證）、資產負債表是時點值，都不用 decum。**現金流量表單位=元**（非千元；2330 全年 OCF 2.27 兆驗證）→ 億 = /1e8。
+
+**拉回整理判定**（`pullback_check.py` 常數可調）：距 52 週高回檔 15–50% + 月線趨勢在（月MA6 上揚或價>月MA12）+ 近 4 週週K區間 ≤12%（整理中），三條全過=✅候選。Shioaji 日線 400 根。
+
+**驗證（2026-06-10 實測）**：2330 鑽豹 11/15（FCF 10,560 億 ✓ 符合真實量級）；/pe 2330：5 年 PE 16.7/23.4/27.5、EPS(TTM)74.39、合理價 1243/1738/2046 vs 現價 2305（+33% 高於 P50）；/pullback：2330 距高僅 5.5% 不是候選 ✓ 邏輯正確。
+
+**附帶安全修補**：httpx 每 10 秒把含 bot token 的 getUpdates URL 用 INFO 寫進 `%TEMP%\smc_bot.log` → smc_bot 加 `logging.getLogger("httpx").setLevel(WARNING)` 關掉（§3.7 精神延伸：log 也不留 token）。
+
+---
+
+## 2.14 ⭐ 2026-06-11 — ATM Model × N 字 合併策略 + 生圖工具
+
+**來源**：使用者看 YouTube ATM Model 影片（亞洲盤交易策略，用 NotebookLM 讀字幕），要把它跟 N 字戰法合併、並做「個股 K 線疊策略標記」生圖。
+
+**決策（AskUserQuestion）**：
+- 整合範圍 = **只寫策略文件，不改訊號程式**（模擬/實盤期謹慎）
+- 生圖形式 = **真實個股 K 線疊 ATM×SMC 標記**（輸出 PNG，適合 Telegram/聊天框）
+
+**關鍵洞察**：ATM 跟你的 `n_pattern.py` 是同骨架（H1/L1 時段高低 + OB 回踩 + 停損掛 OB 外緣都已有）。ATM 真正補的 3 件：① **收針（影線拒絕）當硬門檻** ② **反轉型**備援 ③ **1:3 目標**（你目前 target=H1 保守）。
+
+**TWSE 適配坑**：ATM 原始時段（亞洲盤 06–07 / 東京盤 09–10 GMT+8）是給 24h 市場（NQ/加密貨幣）。台股 09:00 才開盤、沒盤前窗口 → 合併版 TWSE 改用**開盤段 09:00–09:30** 當「時段高低」。別跨品種硬套時段。
+
+**產出**：
+- `ATM_SMC_策略.md`（完整合併規格 + 第 5 節「生圖視覺規格」）
+- `backend/strategy_chart.py`（K 線疊策略標記 → PNG；CLI `python -m backend.strategy_chart <symbol>`；`--demo` 離線測試）
+  - 純繪圖 `_draw_figure` / `render_strategy_chart`(存檔) / `build_chart_png`(回 bytes) / `generate_chart_png`(高階 async，給 bot)
+  - 資料：今日用 `gather_context` 真實 OB；指定日用 `shioaji_fetch_m3`；只畫**單一交易日盤中 M3**（當沖定位）
+  - 台股慣例紅漲綠跌；繁中字型 `Microsoft JhengHei`（避免 ✓/⚠ 等缺字 glyph 變豆腐）
+- **Telegram `/chart 2330 [YYYY-MM-DD]`**（smc_bot `cmd_chart` + 註冊；繪圖丟 `asyncio.to_thread` 不卡 bot；錯誤走 `_safe_err`）。**需重啟 bot 才生效**（雙擊 `啟動SMC機器人.bat`）。
+  - ⚠️ 第一版漏加進 `_post_init` 的 `set_my_commands` 清單 → Telegram 選單看不到。**新指令一定要兩處都加**：`add_handler`（能執行）+ `set_my_commands` BotCommand（選單看得到）。
+  - 無參數 `/chart` = 畫 watchlist 首檔（符合 §2.7.5「選單點一下就有東西」原則）；要指定檔打 `/chart 2330`。
+  - ⚠️ **重啟踩坑（2026-06-11）**：使用者關掉舊 bot 視窗後，新的雙擊沒成功開起來 → 變成 0 個 bot 在跑、所有指令「沒連到」。**驗證重啟成功的方法**：(a) `Select-String %TEMP%\smc_bot.log 'registered \d+ telegram bot commands'` 最後一行要是**今天時間戳 + 正確指令數**；(b) `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 要剛好 **1 個**（0=沒跑、2=409 衝突）。bot 解譯器 = `Python313\python.exe`（**3.13.13**，與 shell 的 3.14 不同！），已確認有 mplfinance/matplotlib。
+
+**待驗證（落地前）**：收針門檻要先在 N 字 backtest 加過濾測勝率（≥90 天，§2.8 教訓）；反轉型本質逆勢、跟 §2.5 禁 Premium Fade 同性質 → 先紙上模擬。**本次未改任何訊號程式（僅加唯讀生圖指令）。**
+
+---
+
 ## 3. 踩過的坑（不要再犯）
 
 ### 3.1 FinMind 免費 tier 不支援分鐘級 K
@@ -467,6 +856,16 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 - **教訓**：lib 釋放資源時，**Python 端清狀態 ≠ server 端清連線**。任何「自動 retry + 累積式」的 lib 都要顯式呼叫 logout / close / disconnect
 - **未做**：SIGSEGV 是 native crash，atexit / Python signal handler 都接不到 → 未來加 process supervisor（subprocess watchdog 或 Windows scheduled task auto-restart）
 
+### 3.9 ⚠️ tw-stock-signal `_analyze_one` 對大盤指數 N+1 query【2026-05-26】
+- **症狀**：`scheduler/daily_job.py::_do_analyze` 對 ~1700 檔股票 dispatch `_analyze_one`，每檔都呼叫 `read_market_index(days=10)` 讀同一份 TAIEX 大盤資料
+- **規模**：1,700 次重複 DuckDB query + 1,700 次 connection open/close，純粹浪費（大盤指數對所有 symbol 都一樣）
+- **修補**（2026-05-26）：
+  - `_analyze_one` 簽名加 `market_idx: pd.DataFrame` 參數（`daily_job.py:141`）
+  - 由 caller 在 dispatch 前讀一次傳進去：`_do_analyze` (`daily_job.py:254`) 與 `bot_handler._run_analyze_from_db` (`bot_handler.py:415`) 兩處都改
+  - `bot_handler.py` lazy import 加 `read_market_index`
+- **未做（待 B/C 修補）**：`_analyze_one` 內還有 4 個 per-symbol read（prices / institutional / margin / shareholding），每個都自開新 DuckDB connection。理論上可改成「整檔共用一條 conn 跑 4 個 SELECT」進一步省 6,800 次 connection open——但需要改 `store.py` API（讓 caller 傳入 conn 而不是每次自開），影響面較大，暫不做
+- **教訓**：dispatch 給 N 個 task 前，凡是「整批共用 / 不隨 symbol 變動」的資料一律提到 dispatch 外面預讀。typed 簽名（強制傳參）是 enforce 這點的最好工具——比口頭約定可靠
+
 ---
 
 ## 4. 待驗證 / 未決議
@@ -511,8 +910,11 @@ N-Pattern 原為 TWSE 09:30-12:30 設計，因 `run_btc_backtest.py` 將 `SMC_SE
 | AI 趨勢分析報告 | `backend/ai_analysis_*.py` + `scripts/demo_ai_report*.py`（5 維度評分 + 雙 K 線 + 可展開明細） |
 | AI 評分 5 維度 | 籌碼 45%（FinMind 三大法人）/ 技術 35%（SMC 7-setup）/ 新聞 20%（aistockmap）/ 基本面、題材面 = 參考 |
 | 盤前簡報 script | `scripts/aistockmap_brief.py --slot=morning\|evening`（獨立進程，配 schtasks） |
-| Telegram 指令 | `/aistockmap` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` / `/ai_analyse` / `/smc_scan` |
-| Telegram 自動 cron | bot 啟動即排 `JobQueue.run_repeating(180s)` 跑 N 字 + OB watcher（盤中才動作） |
+| Telegram 指令 | `/aistockmap` / `/wl` / `/wl_add` / `/wl_del` / `/wl_clear` / `/overnight_check` / `/analyst_scan` / `/watch_alerts` / `/ai_analyse` / `/smc_scan` / `/gainers`（盤末漲幅榜，§2.11）/ `/scan`（當沖選股篩選，§2.12）/ `/dia`（鑽豹評鑒）/ `/pe`（合理價）/ `/pullback`（拉回整理，§2.13）/ `/chart`（ATM×SMC 策略圖，§2.14） |
+| Telegram 自動 cron | bot 啟動即排 `JobQueue.run_repeating(180s)` 跑 N 字 + OB watcher（盤中才動作）＋ `run_daily` 12:30/13:00/13:30 推上市漲幅 ≥5% 榜（§2.11） |
+| Python interpreter | **global Python 3.13**（`...\Programs\Python\Python313\python.exe`，有 pandas/shioaji/PTB）；專案根 `venv/` 是空殼別用（§2.11） |
+| Shioaji IP 白名單 | 登入被 `ip ... not allow` 擋時 → 永豐 API 後台加新 IP（換機 / 動態 IP 必踩，§2.11） |
+| smc_bot 啟動 | 雙擊 `啟動SMC機器人.bat`（= `python -m backend.smc_bot`，自動重啟，log→`%TEMP%\smc_bot.log`）。盤中指令在這支（`SMC_TELEGRAM_BOT_TOKEN`），跟盤前 `tw-stock-signal` daemon 是不同 bot（§2.11） |
 | Telegram bot token | **兩組分開**：`SMC_TELEGRAM_BOT_TOKEN`（這套 smc_bot 專用）+ `TELEGRAM_BOT_TOKEN`（給 `tw-stock-signal/main.py --daemon` 用），同 token 會 409 Conflict |
 | Telegram 安全濾鏡 | `backend/smc_bot.py::_safe_err()` + `_sanitize_for_telegram()` — 所有 exception 推 Telegram 前過濾 JWT/API key/身分證/PYAPI client（§3.7） |
 | Shioaji session 管理 | `reset_login()` 先 `api.logout()` 再清 Python 端 + atexit hook（§3.8 防 451/SIGSEGV） |
