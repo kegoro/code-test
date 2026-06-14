@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from strategy.shortage_radar import (
     detect_shortage, rank_signals, find_clusters,
-    apply_cascade_bonus, ShortageSignal,
+    apply_cascade_bonus, find_rotation_candidates, ShortageSignal,
 )
 
 
@@ -22,13 +22,15 @@ def _make_sig(
     symbol: str, score: int, yoy: float = 25.0,
     sectors: list[str] | None = None,
     tier: str = "",
+    consecutive: int = 2,
+    acceleration: float = 5.0,
 ) -> ShortageSignal:
     s = ShortageSignal(
         symbol=symbol, name=symbol,
         latest_period="2026-04",
-        latest_yoy=yoy, prev_yoy=yoy - 5.0,
-        acceleration=5.0,
-        consecutive_above_20=2,
+        latest_yoy=yoy, prev_yoy=yoy - acceleration,
+        acceleration=acceleration,
+        consecutive_above_20=consecutive,
         revenue_new_high=False,
         score=score,
         grade="強缺貨",
@@ -212,6 +214,65 @@ class TestCascadeBonus:
         unknown = _make_sig("9999", score=3, sectors=["晶圓代工"], tier="")
         apply_cascade_bonus([tier1, unknown])
         assert unknown.cascade_bonus is False
+
+
+# ── find_rotation_candidates ──────────────────────────────────────────────────
+
+class TestRotationCandidates:
+    def test_laggard_flagged_when_leader_exists(self):
+        # 東和鋼鐵已連續爆發（領先股），彰源剛加速（落後補漲）
+        leader = _make_sig("2006", score=4, sectors=["鋼鐵/不鏽鋼"],
+                           consecutive=4, acceleration=8.0)
+        laggard = _make_sig("2030", score=3, sectors=["鋼鐵/不鏽鋼"],
+                            consecutive=0, acceleration=12.0)
+        find_rotation_candidates([leader, laggard])
+        assert laggard.rotation_candidate is True
+        assert laggard.rotation_leader == "2006"
+
+    def test_leader_not_flagged_as_candidate(self):
+        leader = _make_sig("2006", score=4, sectors=["鋼鐵/不鏽鋼"],
+                           consecutive=4, acceleration=8.0)
+        laggard = _make_sig("2030", score=3, sectors=["鋼鐵/不鏽鋼"],
+                            consecutive=0, acceleration=12.0)
+        find_rotation_candidates([leader, laggard])
+        assert leader.rotation_candidate is False
+
+    def test_no_candidate_without_leader(self):
+        # 兩檔都剛加速、無人連續爆發 → 無領先股 → 不標記
+        a = _make_sig("2030", score=3, sectors=["鋼鐵/不鏽鋼"],
+                      consecutive=1, acceleration=10.0)
+        b = _make_sig("2031", score=3, sectors=["鋼鐵/不鏽鋼"],
+                      consecutive=1, acceleration=10.0)
+        find_rotation_candidates([a, b])
+        assert a.rotation_candidate is False
+        assert b.rotation_candidate is False
+
+    def test_laggard_needs_positive_acceleration(self):
+        leader = _make_sig("2006", score=4, sectors=["鋼鐵/不鏽鋼"],
+                           consecutive=4, acceleration=8.0)
+        # 落後股動能向下 → 不算補漲
+        falling = _make_sig("2030", score=3, sectors=["鋼鐵/不鏽鋼"],
+                            consecutive=0, acceleration=-5.0)
+        find_rotation_candidates([leader, falling])
+        assert falling.rotation_candidate is False
+
+    def test_already_running_stock_not_laggard(self):
+        # 同族群兩檔都連續爆發 → 第二檔不算落後（consecutive 太高）
+        leader = _make_sig("2006", score=4, sectors=["鋼鐵/不鏽鋼"],
+                           consecutive=4, acceleration=8.0)
+        also_running = _make_sig("2031", score=4, sectors=["鋼鐵/不鏽鋼"],
+                                 consecutive=3, acceleration=5.0)
+        find_rotation_candidates([leader, also_running])
+        assert also_running.rotation_candidate is False
+
+    def test_rotation_isolated_by_sector(self):
+        leader = _make_sig("2006", score=4, sectors=["鋼鐵/不鏽鋼"],
+                           consecutive=4, acceleration=8.0)
+        # 不同族群的剛加速股，不該被鋼鐵領先股帶動
+        other = _make_sig("3324", score=3, sectors=["AI散熱"],
+                          consecutive=0, acceleration=12.0)
+        find_rotation_candidates([leader, other])
+        assert other.rotation_candidate is False
 
 
 # ── rank_signals ──────────────────────────────────────────────────────────────

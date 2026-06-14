@@ -514,13 +514,26 @@ def build_shortage_radar_message(
             lines.append(_signal_row(s))
         lines.append("")
 
+    rotation_sigs = [s for s in signals if getattr(s, "rotation_candidate", False)]
+    if rotation_sigs:
+        lines.append(f"<b>━━ 🔄 時間差輪動補漲（{len(rotation_sigs)} 檔）━━</b>")
+        lines.append("<i>族群領先股已漲多 → 轉進剛加速的落後股（東鋼→彰源）</i>")
+        for s in rotation_sigs:
+            leader = getattr(s, "rotation_leader", "")
+            sector_str = s.sectors[0] if s.sectors else ""
+            lines.append(
+                f"🔄 <code>{s.symbol}</code> {s.name}（領先股 {leader}）\n"
+                f"  YoY {s.latest_yoy:+.1f}% 剛轉強 | {sector_str}"
+            )
+        lines.append("")
+
     if clusters:
         lines.append("<b>━━ 🔗 供應鏈族群共振 ━━</b>")
         for sector, syms in clusters.items():
             lines.append(f"  {sector}：{'、'.join(syms)}")
         lines.append("")
 
-    if not cascade_sigs and not hot and not potential:
+    if not cascade_sigs and not hot and not potential and not rotation_sigs:
         lines.append("本次掃描無明顯缺貨訊號。")
 
     lines.append("<i>⚡龍頭瀑布 = 龍頭缺貨 → 訂單轉二線 → 二線股最具爆發力</i>")

@@ -493,7 +493,10 @@ async def shortage_radar_job() -> None:
         import asyncio as _asyncio
         import yaml
         from scrapers.finmind.revenue import fetch_monthly_revenue
-        from strategy.shortage_radar import detect_shortage, rank_signals, find_clusters
+        from strategy.shortage_radar import (
+            detect_shortage, rank_signals, find_clusters,
+            apply_cascade_bonus, find_rotation_candidates,
+        )
         from notifier.report import build_shortage_radar_message
 
         try:
@@ -521,6 +524,8 @@ async def shortage_radar_job() -> None:
             if sig is not None and sig.score >= 2:
                 signals.append(sig)
 
+        apply_cascade_bonus(signals)
+        find_rotation_candidates(signals)
         ranked = rank_signals(signals)
         clusters = find_clusters(ranked)
         logger.info(f"[radar] {len(ranked)} shortage signals ({sum(1 for s in ranked if s.score >= 4)} 強缺貨)")
