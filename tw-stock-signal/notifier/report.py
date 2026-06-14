@@ -439,16 +439,22 @@ def build_shortage_radar_message(
     potential = [s for s in signals if s.score == 3]
 
     _GRADE_EMOJI = {
-        "強缺貨":  "🔴",
+        "龍頭瀑布": "⚡",
+        "強缺貨":   "🔴",
         "潛在缺貨": "🟠",
-        "觀察中":  "🟡",
-        "不符合":  "—",
+        "觀察中":   "🟡",
+        "不符合":   "—",
+    }
+    _TIER_TAG = {
+        "tier1": "【龍頭】",
+        "tier2": "【二線】",
+        "":      "",
     }
 
     def _trend_bar(yoy_vals: list) -> str:
         bars = []
         for v in yoy_vals:
-            if v is None:
+            if v is None or (isinstance(v, float) and v != v):
                 bars.append("?")
             elif v >= 30:
                 bars.append("▲▲")
@@ -458,31 +464,45 @@ def build_shortage_radar_message(
                 bars.append("▬")
             else:
                 bars.append("▼")
-        return " ".join(bars)
+        return "→".join(bars)
 
     def _signal_row(s) -> str:
         emoji = _GRADE_EMOJI.get(s.grade, "—")
+        tier_tag = _TIER_TAG.get(getattr(s, "tier", ""), "")
+        acc = getattr(s, "acceleration", None)
         acc_str = (
-            f"+{s.acceleration:.1f}%↑" if s.acceleration is not None and s.acceleration > 0
-            else f"{s.acceleration:.1f}%↓" if s.acceleration is not None
+            f"+{acc:.1f}%↑" if acc is not None and acc > 0
+            else f"{acc:.1f}%↓" if acc is not None
             else ""
         )
         yoy_bar = _trend_bar(s.yoy_trend)
         sector_str = s.sectors[0] if s.sectors else ""
+        cascade_tag = " 💧龍頭瀑布" if getattr(s, "cascade_bonus", False) else ""
         return (
-            f"{emoji} <code>{s.symbol}</code> {s.name}\n"
-            f"  YoY {s.latest_yoy:+.1f}% {acc_str} | 趨勢:{yoy_bar} | {sector_str}"
+            f"{emoji} <code>{s.symbol}</code> {s.name}{tier_tag}{cascade_tag}\n"
+            f"  YoY {s.latest_yoy:+.1f}% {acc_str} | {yoy_bar} | {sector_str}"
         )
+
+    cascade_sigs = [s for s in signals if getattr(s, "cascade_bonus", False)]
+    hot = [s for s in signals if s.score >= 4 and not getattr(s, "cascade_bonus", False)]
+    potential = [s for s in signals if s.score == 3 and not getattr(s, "cascade_bonus", False)]
 
     lines = [
         "📡 <b>缺貨雷達掃描報告</b>",
         f"掃描日期 {scan_date}（{weekday_zh}）| 共掃描 {symbol_count} 檔",
-        f"強缺貨 🔴 {len(hot)} 檔 | 潛在缺貨 🟠 {len(potential)} 檔",
+        f"龍頭瀑布 ⚡{len(cascade_sigs)} | 強缺貨 🔴{len(hot)} | 潛在缺貨 🟠{len(potential)}",
         "",
     ]
 
+    if cascade_sigs:
+        lines.append(f"<b>━━ ⚡ 龍頭瀑布（二線受惠，{len(cascade_sigs)} 檔）━━</b>")
+        lines.append("<i>龍頭產能滿載 → 訂單外溢二線 → 二線更飛</i>")
+        for s in cascade_sigs:
+            lines.append(_signal_row(s))
+        lines.append("")
+
     if hot:
-        lines.append(f"<b>━━ 🔴 強缺貨訊號（{len(hot)} 檔）━━</b>")
+        lines.append(f"<b>━━ 🔴 強缺貨（{len(hot)} 檔）━━</b>")
         for s in hot:
             lines.append(_signal_row(s))
         lines.append("")
@@ -500,10 +520,10 @@ def build_shortage_radar_message(
             lines.append(f"  {sector}：{'、'.join(syms)}")
         lines.append("")
 
-    if not hot and not potential:
+    if not cascade_sigs and not hot and not potential:
         lines.append("本次掃描無明顯缺貨訊號。")
 
-    lines.append(f"<i>缺貨 = 供需失衡 → 廠商漲價 → 營收暴衝（雷老闆理論）</i>")
+    lines.append("<i>⚡龍頭瀑布 = 龍頭缺貨 → 訂單轉二線 → 二線股最具爆發力</i>")
     lines.append(f"<i>掃描完成 {datetime.now().strftime('%H:%M:%S')}</i>")
 
     messages = []

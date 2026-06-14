@@ -594,6 +594,8 @@ async def _cmd_radar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if sig is not None and sig.score >= 2:  # 只保留觀察中以上
                 shortage_signals.append(sig)
 
+        from strategy.shortage_radar import apply_cascade_bonus
+        apply_cascade_bonus(shortage_signals)
         ranked = rank_signals(shortage_signals)
         clusters = find_clusters(ranked)
 
