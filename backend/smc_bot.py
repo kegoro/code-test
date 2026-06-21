@@ -688,6 +688,24 @@ class SMCBot:
                      "進出場為機械參考、非下單指示（模擬期）"),
         )
 
+    async def _job_news_radar(self, context):
+        """每日 07:15 推播 AI/半導體新聞戰情室(缺貨/漲價/營收訊號,Google News RSS)。"""
+        try:
+            import asyncio
+            from backend import news_radar
+            report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report)
+            await context.bot.send_message(chat_id=_CHAT_ID, text=report)
+        except Exception as exc:
+            logger.warning("news_radar job failed: %s", exc)
+
+    async def cmd_news(self, update, context):
+        """AI/半導體新聞戰情室:近 24h 缺貨/漲價/營收訊號(手動觸發)。"""
+        import asyncio
+        from backend import news_radar
+        await update.message.reply_text("📡 掃 AI/半導體新聞中…(約 10 秒)")
+        report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report)
+        await update.message.reply_text(report)
+
     # ── AI 趨勢分析報告（5 維度評分 + 雙 K 線切換） ───────────────────────────
 
     async def cmd_ai_analyse(self, update, context):
@@ -1236,6 +1254,7 @@ class SMCBot:
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("pullback", "📉 拉回整理檢查(週/月線)"),
             BotCommand("chart", "📈 ATM×SMC 策略圖(watchlist首檔；/chart 2330指定)"),
+            BotCommand("news", "📡 AI/半導體新聞戰情室(缺貨/漲價/營收訊號)"),
         ]
         await app.bot.set_my_commands(commands)
         logger.info("registered %d telegram bot commands", len(commands))
@@ -1263,6 +1282,7 @@ class SMCBot:
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))
         app.add_handler(CommandHandler("chart", self.cmd_chart))
+        app.add_handler(CommandHandler("news", self.cmd_news))
         app.add_handler(CommandHandler("ai_analyse", self.cmd_ai_analyse))
         app.add_handler(CommandHandler("sim_open", self.cmd_sim_open))
         app.add_handler(CommandHandler("sim_close", self.cmd_sim_close))
@@ -1317,6 +1337,13 @@ class SMCBot:
                 name="shortage-weekly",
             )
             logger.info("scheduled shortage radar: Mon 07:30 (Asia/Taipei)")
+            # 每日 07:15 推播 AI/半導體新聞戰情室(缺貨/漲價/營收訊號;全球新聞,不分平假日)
+            app.job_queue.run_daily(
+                self._job_news_radar,
+                time=_dt_time(hour=7, minute=15, tzinfo=_tpe),
+                name="news-radar-daily",
+            )
+            logger.info("scheduled news radar: daily 07:15 (Asia/Taipei)")
         else:
             logger.warning("JobQueue 不可用（pip install 'python-telegram-bot[job-queue]'）")
         logger.info("SMC bot polling …")
