@@ -104,6 +104,7 @@ from backend.momentum_scan import scan as run_momentum_scan, MIN_CHANGE_PCT
 from backend import diamond_score
 from backend import pe_valuation
 from backend import pullback_check
+from backend import mops_fundamentals
 from backend.smc_analyst.context import gather_context
 from backend.smc_analyst.pipeline import analyse_watchlist
 from backend.smc_detector import SMCSignal
@@ -169,9 +170,9 @@ class SMCBot:
     @staticmethod
     def _telegram_app():
         from telegram.ext import (
-            Application, CommandHandler,
+            Application, CommandHandler, MessageHandler, filters,
         )
-        return Application, CommandHandler
+        return Application, CommandHandler, MessageHandler, filters
 
     # ── per-command handlers ─────────────────────────────────────────────────
 
@@ -553,6 +554,35 @@ class SMCBot:
 
     # ── 本益比合理價 /pe ──────────────────────────────────────────────────────
 
+    async def cmd_fin(self, update, context):
+        """鑽豹四刀完整分析:/fin 2330 [2317…](最多 3 檔,每檔約 10 秒)。"""
+        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        await self._run_fin(update, codes)
+
+    async def cmd_fin_zh(self, update, context):
+        """中文觸發:輸入「財報 6442」。"""
+        text = update.message.text if update.message else ""
+        codes = re.findall(r"\d{4,6}", text)
+        await self._run_fin(update, codes)
+
+    async def _run_fin(self, update, codes):
+        import asyncio
+        from backend import diamond_full
+        codes = [c for c in codes if c][: mops_fundamentals._MAX_CODES]
+        if not codes:
+            await update.message.reply_text(
+                "用法:/fin 2330(或直接打「財報 2330」)— 鑽豹四刀完整分析"
+                "(第二刀基本面+大猩猩+第一刀進場+第三刀技術+綜合結論)")
+            return
+        await update.message.reply_text(f"🗡️ 鑽豹四刀分析 {len(codes)} 檔中…(每檔約 10 秒)")
+        for code in codes:
+            try:
+                report = await asyncio.to_thread(diamond_full.analyze, code)
+            except Exception as exc:
+                await update.message.reply_text(f"{code}:{_safe_err(exc)}")
+                continue
+            await update.message.reply_text(report)
+
     async def cmd_pe(self, update, context):
         """合理股價=預估EPS×本益比。/pe 2330 或 /pe 2330 65（自估全年 EPS）。"""
         args = context.args or []
@@ -687,24 +717,6 @@ class SMCBot:
             caption=(f"📈 {symbol} ATM×SMC 策略圖｜{label}\n"
                      "進出場為機械參考、非下單指示（模擬期）"),
         )
-
-    async def _job_news_radar(self, context):
-        """每日 07:15 推播 AI/半導體新聞戰情室(缺貨/漲價/營收訊號,Google News RSS)。"""
-        try:
-            import asyncio
-            from backend import news_radar
-            report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report)
-            await context.bot.send_message(chat_id=_CHAT_ID, text=report)
-        except Exception as exc:
-            logger.warning("news_radar job failed: %s", exc)
-
-    async def cmd_news(self, update, context):
-        """AI/半導體新聞戰情室:近 24h 缺貨/漲價/營收訊號(手動觸發)。"""
-        import asyncio
-        from backend import news_radar
-        await update.message.reply_text("📡 掃 AI/半導體新聞中…(約 10 秒)")
-        report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report)
-        await update.message.reply_text(report)
 
     # ── AI 趨勢分析報告（5 維度評分 + 雙 K 線切換） ───────────────────────────
 
@@ -1150,6 +1162,86 @@ class SMCBot:
         except Exception as exc:
             logger.warning("shortage job failed: %s", exc)
 
+    async def _job_blade1(self, context):
+        """每日盤後(週一~五 15:00)掃第一刀觀察名單,有新進場訊號才推。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if datetime.now(ZoneInfo("Asia/Taipei")).weekday() >= 5:
+            return
+        try:
+            import asyncio
+            from backend import blade1_watcher
+            msgs = await asyncio.get_event_loop().run_in_executor(None, blade1_watcher.scan)
+            for m in msgs:
+                await context.bot.send_message(chat_id=_CHAT_ID, text=m)
+        except Exception as exc:
+            logger.warning("blade1 job failed: %s", exc)
+
+    async def cmd_blade1(self, update, context):
+        """第一刀 watcher:掃觀察名單,列現在有進場訊號的。"""
+        import asyncio
+        from backend import blade1_watcher
+        await update.message.reply_text("🗡️ 掃第一刀觀察名單中…(約 20 秒)")
+        report = await asyncio.get_event_loop().run_in_executor(None, blade1_watcher.run_report)
+        await update.message.reply_text(report)
+
+    async def _job_hot(self, context):
+        """每日盤後(週一~五 14:00)推熱門族群雷達:市場在瘋什麼 + 基本面體檢。"""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if datetime.now(ZoneInfo("Asia/Taipei")).weekday() >= 5:
+            return
+        try:
+            import asyncio
+            from backend import hot_sector
+            report = await asyncio.get_event_loop().run_in_executor(None, hot_sector.report)
+            await context.bot.send_message(chat_id=_CHAT_ID, text=report)
+        except Exception as exc:
+            logger.warning("hot_sector job failed: %s", exc)
+
+    async def cmd_hot(self, update, context):
+        """熱門族群雷達:今天市場在瘋哪個族群 + 最熱族群基本面體檢。"""
+        import asyncio
+        from backend import hot_sector
+        await update.message.reply_text("🔥 掃今日熱門族群中…(約 30 秒)")
+        report = await asyncio.get_event_loop().run_in_executor(None, hot_sector.report)
+        await update.message.reply_text(report)
+
+    async def _job_news_radar(self, context):
+        """一天多次推播 AI/半導體新聞戰情室,只推「上次後新出現」的缺貨/漲價/營收訊號(Google News RSS)。"""
+        try:
+            import asyncio
+            from backend import news_radar
+            report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report_incremental)
+            if report:
+                await context.bot.send_message(chat_id=_CHAT_ID, text=report)
+        except Exception as exc:
+            logger.warning("news_radar job failed: %s", exc)
+
+    async def cmd_news(self, update, context):
+        """AI/半導體新聞戰情室:近 24h 缺貨/漲價/營收訊號(手動觸發)。"""
+        import asyncio
+        from backend import news_radar
+        await update.message.reply_text("📡 掃 AI/半導體新聞中…(約 10 秒)")
+        report = await asyncio.get_event_loop().run_in_executor(None, news_radar.report)
+        await update.message.reply_text(report)
+
+    async def cmd_cdp(self, update, context):
+        """CDP 逆勢操作四線(AH/NH/NL/AL)。/cdp 2330 AAPL(台股+美股皆可,最多 5 檔)。"""
+        from backend import cdp
+        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        if not codes:
+            await update.message.reply_text(
+                "用法:/cdp 2330(或 /cdp AAPL)— 由前一交易日高低收算出當沖四線\n"
+                "AH 突破 / NH 轉強 / NL 轉弱 / AL 跌破,台股美股皆可,一次最多 5 檔。")
+            return
+        for code in codes[:5]:
+            try:
+                msg = await cdp.analyze(code)
+            except Exception as exc:
+                msg = f"{code}:{_safe_err(exc)}"
+            await update.message.reply_text(msg)
+
     async def _job_morning_report(self, context):
         """07:00 自動推播鑽豹盤前報告。"""
         from datetime import datetime
@@ -1252,6 +1344,9 @@ class SMCBot:
             BotCommand("gainers", "🔥 今日上市漲幅 ≥5% 強勢股"),
             BotCommand("scan", "🎯 當沖選股(漲幅+均線+量能+型態)"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
+            BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
+            BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
+            BotCommand("hot", "🔥 熱門族群雷達（今天市場在瘋什麼）"),
             BotCommand("pullback", "📉 拉回整理檢查(週/月線)"),
             BotCommand("chart", "📈 ATM×SMC 策略圖(watchlist首檔；/chart 2330指定)"),
             BotCommand("news", "📡 AI/半導體新聞戰情室(缺貨/漲價/營收訊號)"),
@@ -1260,10 +1355,17 @@ class SMCBot:
         logger.info("registered %d telegram bot commands", len(commands))
 
     def run(self) -> None:
-        Application, CommandHandler = self._telegram_app()
+        Application, CommandHandler, MessageHandler, filters = self._telegram_app()
         app = (
             Application.builder()
             .token(_BOT_TOKEN)
+            # 容忍慢握手：預設 connect_timeout 太短,啟動瞬間網路稍慢就 TimedOut crash
+            .connect_timeout(30.0)
+            .read_timeout(30.0)
+            .write_timeout(30.0)
+            .pool_timeout(30.0)
+            .get_updates_connect_timeout(30.0)
+            .get_updates_read_timeout(30.0)
             .post_init(self._post_init)
             .build()
         )
@@ -1282,7 +1384,6 @@ class SMCBot:
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))
         app.add_handler(CommandHandler("chart", self.cmd_chart))
-        app.add_handler(CommandHandler("news", self.cmd_news))
         app.add_handler(CommandHandler("ai_analyse", self.cmd_ai_analyse))
         app.add_handler(CommandHandler("sim_open", self.cmd_sim_open))
         app.add_handler(CommandHandler("sim_close", self.cmd_sim_close))
@@ -1292,6 +1393,12 @@ class SMCBot:
         app.add_handler(CommandHandler("txf_result", self.cmd_txf_result))
         app.add_handler(CommandHandler("txf_stats", self.cmd_txf_stats))
         app.add_handler(CommandHandler("shortage", self.cmd_shortage))
+        app.add_handler(CommandHandler("fin", self.cmd_fin))
+        app.add_handler(CommandHandler("blade1", self.cmd_blade1))
+        app.add_handler(CommandHandler("hot", self.cmd_hot))
+        app.add_handler(CommandHandler("cdp", self.cmd_cdp))
+        app.add_handler(CommandHandler("news", self.cmd_news))
+        app.add_handler(MessageHandler(filters.Regex(r"^\s*財報"), self.cmd_fin_zh))
 
         # JobQueue：盤中每 3 分鐘自動跑一次 N 字 watcher（含 dedup）
         if app.job_queue is not None:
@@ -1337,13 +1444,31 @@ class SMCBot:
                 name="shortage-weekly",
             )
             logger.info("scheduled shortage radar: Mon 07:30 (Asia/Taipei)")
-            # 每日 07:15 推播 AI/半導體新聞戰情室(缺貨/漲價/營收訊號;全球新聞,不分平假日)
+            # 每日盤後 15:00 掃第一刀觀察名單(有新帶量長紅K訊號才推)
             app.job_queue.run_daily(
-                self._job_news_radar,
-                time=_dt_time(hour=7, minute=15, tzinfo=_tpe),
-                name="news-radar-daily",
+                self._job_blade1,
+                time=_dt_time(hour=15, minute=0, tzinfo=_tpe),
+                days=(0, 1, 2, 3, 4),
+                name="blade1-daily",
             )
-            logger.info("scheduled news radar: daily 07:15 (Asia/Taipei)")
+            logger.info("scheduled blade1 watcher: weekdays 15:00 (Asia/Taipei)")
+            # 每日盤後 14:00 熱門族群雷達(市場在瘋什麼 + 最熱族群基本面體檢)
+            app.job_queue.run_daily(
+                self._job_hot,
+                time=_dt_time(hour=14, minute=0, tzinfo=_tpe),
+                days=(0, 1, 2, 3, 4),
+                name="hot-sector-daily",
+            )
+            logger.info("scheduled hot-sector: weekdays 14:00 (Asia/Taipei)")
+            # 一天 5 次(約每 4 小時)推播 AI/半導體新聞戰情室,只推新出現的缺貨/漲價/營收訊號
+            # (全球新聞,不分平假日;比照盤前/盤中/美股開盤後時段分布)
+            for _hh, _mm in ((7, 15), (11, 0), (15, 0), (19, 0), (23, 0)):
+                app.job_queue.run_daily(
+                    self._job_news_radar,
+                    time=_dt_time(hour=_hh, minute=_mm, tzinfo=_tpe),
+                    name=f"news-radar-{_hh:02d}{_mm:02d}",
+                )
+            logger.info("scheduled news radar: 07:15/11:00/15:00/19:00/23:00 (Asia/Taipei), incremental-only")
         else:
             logger.warning("JobQueue 不可用（pip install 'python-telegram-bot[job-queue]'）")
         logger.info("SMC bot polling …")

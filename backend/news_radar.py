@@ -10,16 +10,21 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
 import requests
 
 logger = logging.getLogger("news_radar")
+
+_SEEN_PATH = Path(__file__).resolve().parent.parent / "data" / "news_radar_seen.json"
+_SEEN_TTL_HOURS = 48  # 比 WINDOW_HOURS(26) 長,確保去重記錄涵蓋整個抓取窗
 
 _RSS = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
 
@@ -120,6 +125,52 @@ def report(max_items: int = 15) -> str:
         for it in rest:
             lines.append(f"  • {it.title}")
 
+    lines.append("\n⚠️ 關鍵字篩標題,非分析師判讀;訊號≠該交易,自行核實後再決定。")
+    return "\n".join(lines)
+
+
+def _load_seen() -> dict[str, str]:
+    try:
+        return json.loads(_SEEN_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_seen(seen: dict[str, str]) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=_SEEN_TTL_HOURS)
+    pruned = {
+        link: ts for link, ts in seen.items()
+        if datetime.fromisoformat(ts) > cutoff
+    }
+    _SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _SEEN_PATH.write_text(json.dumps(pruned, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _format_flagged(items: list[NewsItem], max_items: int) -> list[str]:
+    lines = []
+    for it in items[:max_items]:
+        tags = "/".join(it.signals)
+        lines.append(f"  [{tags}] {it.title}\n     {it.link}")
+    return lines
+
+
+def report_incremental(max_items: int = 15) -> str | None:
+    """只回報「上次推送後新出現」的缺貨/漲價/營收訊號;沒有新訊號回傳 None(呼叫端應跳過推播)。"""
+    items = fetch_all()
+    seen = _load_seen()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    new_items = [i for i in items if i.link not in seen]
+    for i in items:
+        seen.setdefault(i.link, now_iso)
+    _save_seen(seen)
+
+    new_flagged = [i for i in new_items if i.signals]
+    if not new_flagged:
+        return None
+
+    lines = [f"📡 AI/半導體新聞戰情室(新訊號 {len(new_flagged)} 則):", "\n🚨 缺貨/漲價/營收訊號:"]
+    lines.extend(_format_flagged(new_flagged, max_items))
     lines.append("\n⚠️ 關鍵字篩標題,非分析師判讀;訊號≠該交易,自行核實後再決定。")
     return "\n".join(lines)
 
