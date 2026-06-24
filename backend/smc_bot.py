@@ -101,6 +101,7 @@ from backend.shioaji_fetcher import (
     shioaji_scan_gainers,
 )
 from backend.momentum_scan import scan as run_momentum_scan, MIN_CHANGE_PCT
+from backend.momentum_scan import bowl_scan as run_bowl_scan
 from backend import diamond_score
 from backend import pe_valuation
 from backend import pullback_check
@@ -512,6 +513,53 @@ class SMCBot:
             lines.append(f"…還有 {extra} 檔（依型態分排序取前 {self._SCAN_MAX_ROWS}）")
         lines.append("")
         lines.append("型態分=糾結+收縮+破20日高+週多頭+月多頭；圖形(三角/杯柄)請自行於 12:30-13:30 判讀")
+        return "\n".join(lines)
+
+    # ── 碗型整理+爆量突破 /bowl（不設漲幅門檻，依今日成交量排序深掃）──────────────
+
+    async def cmd_bowl_scan(self, update, context):
+        """碗型底部+爆量突破：底部均線糾結 + 今日爆量 + 收破20日高。用法：/bowl"""
+        await update.message.reply_text("🥣 碗型+爆量掃描中…（依今日量排序逐檔日線分析，約 30 秒）")
+        try:
+            result = await run_bowl_scan()
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_bowl(now, result))
+
+    def _format_bowl(self, now, r) -> str:
+        hhmm = now.strftime("%m-%d %H:%M")
+        mk = "✅" if r.market_ok else "⚠️"
+        pct_str = f"（掃 {r.scanned} 檔，依量排序深掃前 {r.deep_analyzed} 檔）"
+        head = [
+            f"🥟 碗型+爆量 /bowl  {hhmm}",
+            f"大盤：{r.market_state} {mk}",
+            f"碗型盤整+爆量+突破20日高：{len(r.candidates)} 檔{pct_str}",
+        ]
+        if not r.candidates:
+            head.append("")
+            head.append("目前無符合「底部糾結+今日爆量+突破20日高」的個股。")
+            return "\n".join(head)
+        lines = head + [""]
+        for idx, c in enumerate(r.candidates[: self._SCAN_MAX_ROWS], 1):
+            star = "⭐" * c.score
+            sign = "+" if c.change_rate >= 0 else ""
+            lines.append(
+                f"{idx}. {c.code} {c.name} {sign}{c.change_rate:.1f}%  量{c.vol_ratio:.1f}× {star}"
+            )
+            if c.tags:
+                lines.append(f"   {' '.join(c.tags)}")
+            lines.append(
+                f"   月:{c.tf_monthly.trend} 週:{c.tf_weekly.trend} 日:{c.tf_daily.trend}"
+            )
+        extra = len(r.candidates) - self._SCAN_MAX_ROWS
+        if extra > 0:
+            lines.append(f"…還有 {extra} 檔（依型態分排序取前 {self._SCAN_MAX_ROWS}）")
+        lines.append("")
+        lines.append("型態分=碗型盤整+爆量+破20日高(基本3分)+波動收縮+週多頭+月多頭；不設漲幅門檻")
         return "\n".join(lines)
 
     # ── 鑽豹評鑒 /dia ─────────────────────────────────────────────────────────
@@ -1343,6 +1391,7 @@ class SMCBot:
             BotCommand("analyst_scan", "🧠 對 watchlist 跑 7-setup pipeline"),
             BotCommand("gainers", "🔥 今日上市漲幅 ≥5% 強勢股"),
             BotCommand("scan", "🎯 當沖選股(漲幅+均線+量能+型態)"),
+            BotCommand("bowl", "🥣 碗型整理+爆量突破(不設漲幅門檻)"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
@@ -1380,6 +1429,7 @@ class SMCBot:
         app.add_handler(CommandHandler("watch_alerts", self.cmd_watch_alerts))
         app.add_handler(CommandHandler("gainers", self.cmd_gainers))
         app.add_handler(CommandHandler("scan", self.cmd_daytrade_scan))
+        app.add_handler(CommandHandler("bowl", self.cmd_bowl_scan))
         app.add_handler(CommandHandler("dia", self.cmd_diamond))
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))
