@@ -105,6 +105,7 @@ from backend.momentum_scan import bowl_scan as run_bowl_scan
 from backend.potential_scan import (
     scan as run_potential_scan,
     scan_strong as run_strong_scan,
+    explain_six as run_six_detail,
     COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT,
 )
 from backend import diamond_score
@@ -717,7 +718,17 @@ class SMCBot:
             except Exception as exc:
                 await update.message.reply_text(f"{code}:{_safe_err(exc)}")
                 continue
-            await update.message.reply_text(report)
+            # 附掛六大技術特性逐項解說（原報告不動，接在後面）
+            try:
+                six = await run_six_detail(code)
+            except Exception:
+                six = ""
+            if six and len(report) + len(six) + 2 <= 4000:
+                await update.message.reply_text(report + "\n\n" + six)
+            else:
+                await update.message.reply_text(report)
+                if six:
+                    await update.message.reply_text(six)
 
     async def cmd_pe(self, update, context):
         """合理股價=預估EPS×本益比。/pe 2330 或 /pe 2330 65（自估全年 EPS）。"""

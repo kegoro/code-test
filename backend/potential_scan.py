@@ -290,6 +290,88 @@ async def _scan(min_score: int, min_pct: float | None) -> PotentialResult:
     )
 
 
+def _six_detail_lines(df: pd.DataFrame) -> tuple[int, list[str]]:
+    """單檔逐條解說（命中與否 + 實際數字）。回傳 (score, 文字行list)。"""
+    close, high, low, vol = df["close"], df["high"], df["low"], df["volume"]
+    score = 0
+    out: list[str] = []
+
+    def mk(ok: bool) -> str:
+        nonlocal score
+        if ok:
+            score += 1
+        return "✅" if ok else "▫️"
+
+    # ① 量放大
+    vol_ma = vol.rolling(MA_PERIOD).mean()
+    vr = float(vol.iloc[-1] / vol_ma.iloc[-1]) if vol_ma.iloc[-1] > 0 else 0.0
+    ok = vr >= VOL_MULT
+    out.append(f"① 量放大 {mk(ok)} 今量 {vr:.1f}×20日均量（門檻 {VOL_MULT:g}×）")
+
+    # ② 均線多頭
+    ma = close.rolling(MA_PERIOD).mean()
+    slope_up = ma.iloc[-1] > ma.iloc[-1 - SLOPE_LOOKBACK]
+    above = close.iloc[-1] > ma.iloc[-1]
+    ok = slope_up and above
+    why = "MA20上彎且收盤站上" if ok else ("MA20上彎但收盤未站上" if slope_up else ("收盤站上但MA20未上彎" if above else "MA20走平/下彎且收盤在下"))
+    out.append(f"② 均線多頭 {mk(ok)} {why}（收{close.iloc[-1]:.2f} / MA20 {ma.iloc[-1]:.2f}）")
+
+    # ③ 布林開口
+    std = close.rolling(MA_PERIOD).std()
+    bw = (4 * std) / ma
+    widen = bw.iloc[-1] > bw.iloc[-1 - BAND_LOOKBACK] * BAND_OPEN_RATIO
+    ok = widen and above
+    why = "帶寬放大且收盤在中軌上（突破中）" if ok else ("帶寬放大但收盤未過中軌" if widen else "帶寬未較5日前放大（仍收斂）")
+    out.append(f"③ 布林開口 {mk(ok)} {why}")
+
+    # ④ 斐波回調
+    window = df.iloc[-FIB_LOOKBACK:]
+    low_idx = window["low"].idxmin()
+    after = window.loc[low_idx:]
+    fib = float("nan")
+    ok = False
+    if len(after) >= 2:
+        sl, sh = float(window["low"].min()), float(after["high"].max())
+        if sh > sl:
+            fib = (sh - close.iloc[-1]) / (sh - sl)
+            ok = FIB_LOW - FIB_TOL <= fib <= FIB_HIGH + FIB_TOL
+    fib_txt = f"回調 {fib*100:.0f}%" if fib == fib else "無有效波段"
+    why = f"{fib_txt}（落在黃金區 38~62%）" if ok else (f"{fib_txt}（不在 38~62%）" if fib == fib else fib_txt)
+    out.append(f"④ 斐波回調 {mk(ok)} {why}")
+
+    # ⑤ RSI 止穩翻揚
+    rsi = _rsi(close)
+    in_band = RSI_LOW <= rsi.iloc[-1] <= RSI_HIGH
+    rising = rsi.iloc[-1] > rsi.iloc[-2]
+    ok = in_band and rising
+    why = "在 45~60 止穩帶且翻揚" if ok else (f"RSI {rsi.iloc[-1]:.0f} 在帶內但未翻揚" if in_band else f"RSI {rsi.iloc[-1]:.0f} 不在 45~60 帶")
+    out.append(f"⑤ RSI翻揚 {mk(ok)} {why}")
+
+    # ⑥ MACD 金叉
+    ema_f = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_s = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    dif = ema_f - ema_s
+    dea = dif.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    hist = dif - dea
+    ok = hist.iloc[-1] > 0 and hist.iloc[-1 - CROSS_WINDOW] < 0
+    why = f"近 {CROSS_WINDOW} 日柱由負翻正（剛金叉）" if ok else ("柱已在零軸上（金叉已過）" if hist.iloc[-1] > 0 else "柱仍在零軸下（未金叉）")
+    out.append(f"⑥ MACD金叉 {mk(ok)} {why}")
+
+    return score, out
+
+
+async def explain_six(code: str, name: str = "") -> str:
+    """單檔六大技術特性逐項解說（供 /fin 附掛）。"""
+    df = await _fetch_ohlcv(code)
+    title = f"━━ 六大技術特性 {code} {name}".rstrip()
+    if df.empty or len(df) < MIN_BARS:
+        return f"{title} ━━\n資料不足（需 ≥{MIN_BARS} 根日線），略過"
+    score, lines = _six_detail_lines(df)
+    head = [f"{title} ━━", "（收盤級日線 / FinMind 免費非還原）", f"命中 {score}/6"]
+    tail = ["", "③突破 vs ④拉回 互斥不會同時亮；中④=拉回找買點、中⑥=已啟動追勢"]
+    return "\n".join(head + [""] + lines + tail)
+
+
 async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
     """潛力股：全市場活躍股(成交值前 N) + 6 條件計分。"""
     return await _scan(min_score, min_pct=None)
