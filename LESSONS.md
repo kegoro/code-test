@@ -131,6 +131,10 @@ C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.
 ### 1.8 潛力股掃描器（2026-06-27）`sector/breakout_scan.py`
 依選股總結圖 6 條技術特性對「中大型活躍股」計分(0-6)排名。活躍股清單＝TWSE `STOCK_DAY_ALL` + TPEX `tpex_mainboard_daily_close_quotes` 各一次、用成交值排序取前 N(上市+上櫃都涵蓋)。6 條：①量≥1.5×20日均量 ②MA20上彎且價在上 ③布林帶寬放大且價在中軌上 ④近60日波段回調落 38.2~61.8% ⑤RSI(14)45~60且翻揚 ⑥近3日MACD柱由負翻正(金叉)。**6 條互斥(③突破 vs ④拉回不會同日成立)故用計分非 AND**；中④=拉回找買點型、中⑥=已啟動追勢型。CLI：`.venv/Scripts/python.exe -m sector.breakout_scan --top 200 --min-score 4 --csv ...`。
 
+**已移植進 backend 做成 smc_bot `/potential` 指令**（`backend/potential_scan.py`，2026-06-27）：改用 Shioaji 還原日線、複用 smc_bot 已登入連線（**不另開 session 免撞 451 Too Many Connections**）、涵蓋 TSE+OTC、依今日成交值取前 150 活躍股深掃。計分邏輯與免費版一致。`/potential [最低分]` 預設 4。
+
+⚠️ **盤中半根 K 坑（2026-06-27 踩到並修）**：Shioaji 是**即時**的，盤中跑 `/potential` 時最後一根日線是「**當天形成中、只累積到當下的半根 K**」→ ① 量放大（今日量 vs 20日整天均量）幾乎全廢、收盤價未定讓 ②③④⑤ 全飄 → **全市場集體摜破門檻、掃出 0 檔**，跟早上 FinMind（收盤後才更新、評完整日線）結果天差地遠。**潛力股是收盤級篩選**：`_trim_forming()` 在 13:35 前自動剔除今天那根半 K、改評前一完整交易日，收盤後才用當天。**通則：任何「即時資料源 + 日線型態/量能篩選」都要先確認最後一根 K 是否已收完，否則量能/型態判斷全錯。**
+
 ---
 
 ## 2. ⭐ 2026-05-16 — 雷老闆面談後的策略升級【最新、最重要】
