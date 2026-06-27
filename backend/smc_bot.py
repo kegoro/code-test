@@ -102,6 +102,7 @@ from backend.shioaji_fetcher import (
 )
 from backend.momentum_scan import scan as run_momentum_scan, MIN_CHANGE_PCT
 from backend.momentum_scan import bowl_scan as run_bowl_scan
+from backend.potential_scan import scan as run_potential_scan, COND_MARK, DEFAULT_MIN_SCORE
 from backend import diamond_score
 from backend import pe_valuation
 from backend import pullback_check
@@ -560,6 +561,57 @@ class SMCBot:
             lines.append(f"…還有 {extra} 檔（依型態分排序取前 {self._SCAN_MAX_ROWS}）")
         lines.append("")
         lines.append("型態分=碗型盤整+爆量+破20日高(基本3分)+波動收縮+週多頭+月多頭；不設漲幅門檻")
+        return "\n".join(lines)
+
+    # ── 潛力股 6 條技術特性 /potential（中大型活躍股計分排名）─────────────────────
+
+    async def cmd_potential_scan(self, update, context):
+        """潛力股掃描：6 條技術特性計分。/potential [最低分]（預設 4）。約 1-2 分鐘。"""
+        min_score = DEFAULT_MIN_SCORE
+        if context.args:
+            try:
+                min_score = max(1, min(6, int(context.args[0])))
+            except ValueError:
+                pass
+        await update.message.reply_text(
+            f"🔭 潛力股掃描中…（中大型活躍股逐檔日線計分，門檻 {min_score} 分，約 1-2 分鐘）"
+        )
+        try:
+            result = await run_potential_scan(min_score)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_potential(now, result))
+
+    def _format_potential(self, now, r) -> str:
+        hhmm = now.strftime("%m-%d %H:%M")
+        head = [
+            f"🔭 潛力股 /potential  {hhmm}",
+            "條件 ①量放大 ②均線多頭 ③布林開口 ④斐波回調 ⑤RSI翻揚 ⑥MACD金叉",
+            f"≥{r.min_score} 分：{len(r.candidates)} 檔（掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股）",
+        ]
+        if not r.candidates:
+            head.append("")
+            head.append("目前無達標個股，可降門檻：/potential 3")
+            return "\n".join(head)
+        lines = head + [""]
+        for idx, c in enumerate(r.candidates[: self._SCAN_MAX_ROWS], 1):
+            marks = "".join(COND_MARK[x] for x in c.conds)
+            fib = f"回調{c.fib_retr*100:.0f}%" if c.fib_retr == c.fib_retr else "回調—"  # NaN check
+            lines.append(
+                f"{idx}. {c.code} {c.name}  {c.score}分 {marks}"
+            )
+            lines.append(
+                f"   收{c.close:,.2f} 量{c.vol_ratio:.1f}× RSI{c.rsi:.0f} {fib}"
+            )
+        extra = len(r.candidates) - self._SCAN_MAX_ROWS
+        if extra > 0:
+            lines.append(f"…還有 {extra} 檔（依分數→成交值排序取前 {self._SCAN_MAX_ROWS}）")
+        lines.append("")
+        lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
         return "\n".join(lines)
 
     # ── 鑽豹評鑒 /dia ─────────────────────────────────────────────────────────
@@ -1430,6 +1482,7 @@ class SMCBot:
         app.add_handler(CommandHandler("gainers", self.cmd_gainers))
         app.add_handler(CommandHandler("scan", self.cmd_daytrade_scan))
         app.add_handler(CommandHandler("bowl", self.cmd_bowl_scan))
+        app.add_handler(CommandHandler("potential", self.cmd_potential_scan))
         app.add_handler(CommandHandler("dia", self.cmd_diamond))
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))
