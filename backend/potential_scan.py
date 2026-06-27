@@ -51,6 +51,7 @@ NEW_FIB_KEYS = (0.382, 0.618)   # ④ 只認 38.2% / 61.8% 兩個關鍵位
 NEW_FIB_TOL = 0.03        # ④ 關鍵位容差 ±3%
 NEW_RSI_MID = 50.0        # ⑤ 50 為多空分界，回測企穩再上
 NEW_MIN_BARS = NEW_MA_SLOW + 25  # 要算 MA200 + 上彎窗
+SIX_MIN_SCORE = 3         # /six 掃描預設門檻（逐字稿版較嚴，預設 3）
 TOP_N = 150              # 中大型活躍股：依今日成交值排序、只深掃前 N 檔（FinMind 免費匿名層上限保守值）
 STRONG_PCT = 5.0         # 強勢股門檻：當日漲幅 ≥ 5%
 DEFAULT_MIN_SCORE = 4
@@ -293,6 +294,51 @@ async def _scan(min_score: int, min_pct: float | None) -> PotentialResult:
     except Exception:
         pass
 
+    return PotentialResult(
+        candidates=tuple(survivors), scanned=total,
+        deep_analyzed=len(scored), min_score=min_score,
+    )
+
+
+def _new_score_df(df: pd.DataFrame) -> tuple[int, list[int], float, float, float]:
+    """逐字稿版(趨勢交易)計分：回傳 (score, 命中編號, rsi, fib%, 量比)。"""
+    oks = _new_compact(df)
+    conds = [i + 1 for i, (ok, _) in enumerate(oks) if ok]
+    close, vol = df["close"], df["volume"]
+    rsi = float(_rsi(close).iloc[-1])
+    vol_ma = vol.rolling(MA_PERIOD).mean().iloc[-1]
+    vr = float(vol.iloc[-1] / vol_ma) if vol_ma > 0 else 0.0
+    window = df.iloc[-FIB_LOOKBACK:]
+    after = window.loc[window["low"].idxmin():]
+    fib = float("nan")
+    if len(after) >= 2:
+        sl, sh = float(window["low"].min()), float(after["high"].max())
+        if sh > sl:
+            fib = (sh - close.iloc[-1]) / (sh - sl)
+    return len(conds), conds, rsi, fib, vr
+
+
+async def scan_six(min_score: int = SIX_MIN_SCORE) -> PotentialResult:
+    """潛力股(逐字稿版)：全市場活躍股套趨勢交易 6 模塊計分。"""
+    universe, total = await _build_universe(TOP_N, min_pct=None)
+
+    async def _one(code: str, name: str, tv: float, pct: float) -> PotentialCandidate | None:
+        df = await _fetch_ohlcv(code)
+        if df.empty:
+            return None
+        score, conds, rsi, fib, vr = _new_score_df(df)
+        return PotentialCandidate(
+            code=code, name=name, trade_value=tv, close=float(df["close"].iloc[-1]),
+            score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
+            pct_change=(pct if pd.notna(pct) else 0.0),
+        )
+
+    results = await asyncio.gather(*[_one(c, n, tv, pct) for c, n, tv, pct in universe])
+    scored = [r for r in results if r is not None]
+    survivors = sorted(
+        [r for r in scored if r.score >= min_score],
+        key=lambda r: (r.score, r.trade_value), reverse=True,
+    )
     return PotentialResult(
         candidates=tuple(survivors), scanned=total,
         deep_analyzed=len(scored), min_score=min_score,

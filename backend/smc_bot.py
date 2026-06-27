@@ -105,9 +105,10 @@ from backend.momentum_scan import bowl_scan as run_bowl_scan
 from backend.potential_scan import (
     scan as run_potential_scan,
     scan_strong as run_strong_scan,
+    scan_six as run_six_scan,
     explain_six as run_six_detail,
     explain_six_compare as run_six_compare,
-    COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT,
+    COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT, SIX_MIN_SCORE,
 )
 from backend import diamond_score
 from backend import pe_valuation
@@ -592,19 +593,26 @@ class SMCBot:
         now = datetime.now(ZoneInfo("Asia/Taipei"))
         await update.message.reply_text(self._format_potential(now, result))
 
-    def _format_potential(self, now, r, strong: bool = False) -> str:
+    def _format_potential(self, now, r, strong: bool = False, six: bool = False) -> str:
         hhmm = now.strftime("%m-%d %H:%M")
-        if strong:
+        if six:
+            title = f"🔬 潛力股(逐字稿版) /six  {hhmm}"
+            cond = "條件 ①量價配合 ②均線50/200多頭 ③突破上軌 ④貼38.2/61.8 ⑤RSI站上50企穩 ⑥柱縮→金叉"
+            pool = f"掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股"
+            lower = "目前無達標個股，可降門檻：/six 2"
+        elif strong:
             title = f"🚀 強勢股 /strong  {hhmm}"
+            cond = "條件 ①量放大 ②均線多頭 ③布林開口 ④斐波回調 ⑤RSI翻揚 ⑥MACD金叉"
             pool = f"掃 {r.scanned} 檔漲幅≥{STRONG_PCT:.0f}%，深掃 {r.deep_analyzed} 檔"
             lower = "目前無達標個股，可降門檻：/strong 3"
         else:
             title = f"🔭 潛力股 /potential  {hhmm}"
+            cond = "條件 ①量放大 ②均線多頭 ③布林開口 ④斐波回調 ⑤RSI翻揚 ⑥MACD金叉"
             pool = f"掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股"
             lower = "目前無達標個股，可降門檻：/potential 3"
         head = [
             title,
-            "條件 ①量放大 ②均線多頭 ③布林開口 ④斐波回調 ⑤RSI翻揚 ⑥MACD金叉",
+            cond,
             f"≥{r.min_score} 分：{len(r.candidates)} 檔（{pool}）",
         ]
         if not r.candidates:
@@ -626,22 +634,44 @@ class SMCBot:
         if extra > 0:
             lines.append(f"…還有 {extra} 檔（依分數→成交值排序取前 {self._SCAN_MAX_ROWS}）")
         lines.append("")
-        lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
+        if six:
+            lines.append("逐字稿版=趨勢交易：②雙均線多頭為地基，⑥金叉為點火；分數較嚴=訊號較純")
+        else:
+            lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
         return "\n".join(lines)
 
     # ── 六大指標新舊對照 /six ─────────────────────────────────────────────────
 
     async def cmd_six_compare(self, update, context):
-        """單檔六大指標：現有版 vs 逐字稿(趨勢交易)版逐模塊對照。/six 2344。"""
-        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
-        if not codes:
-            await update.message.reply_text("用法：/six 2330（單檔六大指標 新舊邏輯對照）")
+        """/six：無代碼→逐字稿版全市場掃描；/six 2330→單檔新舊對照；/six 2→掃描門檻2分。"""
+        toks = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        codes = [t for t in toks if len(t) >= 4]          # 4 碼以上＝股票代碼
+        nums = [t for t in toks if t.isdigit() and len(t) <= 1]  # 個位數＝掃描門檻
+
+        if codes:  # 單檔(可多檔)新舊對照
+            for code in codes[:5]:
+                try:
+                    await update.message.reply_text(await run_six_compare(code))
+                except Exception as exc:
+                    await update.message.reply_text(f"{code}:{_safe_err(exc)}")
             return
-        for code in codes[:5]:
-            try:
-                await update.message.reply_text(await run_six_compare(code))
-            except Exception as exc:
-                await update.message.reply_text(f"{code}:{_safe_err(exc)}")
+
+        # 無代碼 → 全市場逐字稿版掃描
+        min_score = SIX_MIN_SCORE
+        if nums:
+            min_score = max(1, min(6, int(nums[0])))
+        await update.message.reply_text(
+            f"🔬 潛力股(逐字稿版)掃描中…（趨勢交易 6 模塊逐檔日線計分，門檻 {min_score} 分，約 1-2 分鐘）"
+        )
+        try:
+            result = await run_six_scan(min_score)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_potential(now, result, six=True))
 
     # ── 強勢股 6 條技術特性 /strong（當日漲幅≥5% + 計分）─────────────────────────
 
@@ -1508,7 +1538,7 @@ class SMCBot:
             BotCommand("bowl", "🥣 碗型整理+爆量突破(不設漲幅門檻)"),
             BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
             BotCommand("strong", "🚀 強勢股(當日漲幅≥5%)再套6條技術特性計分"),
-            BotCommand("six", "🔬 六大指標 新舊對照（/six 2330 現有版 vs 趨勢交易版）"),
+            BotCommand("six", "🔬 逐字稿版6模塊：/six 全市場掃描；/six 2330 單檔新舊對照"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
