@@ -1,7 +1,10 @@
 """潛力股掃描器 — 依「6 條技術特性」對中大型活躍股計分排名。
 
-供 smc_bot `/potential` 指令用。資料源 Shioaji（還原日線，複用 smc_bot 已登入連線，
-不另開 session 以免撞 451 Too Many Connections）。涵蓋上市(TSE)+上櫃(OTC)。
+供 smc_bot `/potential` 指令用。
+
+資料源（完全不碰 Shioaji，避免 30 天 kbar 上限 + 451 連線衝突）：
+  - 活躍股清單：TWSE OpenAPI STOCK_DAY_ALL + TPEX OpenAPI（各一次、含成交值）→ 依成交值排序取前 N
+  - 個股日線  ：FinMind 免費匿名（不帶 token、非還原日線；收盤級資料、不含當日半根 K）
 
 6 條（出自使用者選股總結圖 IMG_7051），量化判定：
   ① 量放大        : 今日量 ≥ VOL_MULT × 20日均量
@@ -18,17 +21,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, time as dtime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
+from pathlib import Path
 
+import httpx
 import numpy as np
 import pandas as pd
-
-from backend.shioaji_fetcher import (
-    _get_api,
-    _sync_fetch_daily,
-    _SNAPSHOT_BATCH,
-)
 
 # ── 判定參數（要調篩選嚴格度改這裡）──────────────────────────────────────────
 VOL_MULT = 1.5            # ① 量能倍數
@@ -44,18 +42,27 @@ RSI_LOW, RSI_HIGH = 45.0, 60.0   # ⑤ RSI 止穩帶
 MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 CROSS_WINDOW = 3         # ⑥ 金叉回看天數
 MIN_BARS = FIB_LOOKBACK + 5
-DAILY_LOOKBACK = 120     # 抓日線根數（夠 60 日波段 + MA20 + MACD 暖機）
-DEEP_LIMIT = 150         # 中大型活躍股：依今日成交值排序，只深掃前 N 檔
+TOP_N = 150              # 中大型活躍股：依今日成交值排序、只深掃前 N 檔（FinMind 免費匿名層上限保守值）
 DEFAULT_MIN_SCORE = 4
 
+# ── FinMind / 交易所 OpenAPI ──────────────────────────────────────────────
+_FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
+_PRICE_DATASET = "TaiwanStockPrice"        # 非還原、免費
+_PRICE_LOOKBACK_DAYS = 420                  # 暖機 MA60 + MACD26 + 60 日波段
+_TWSE_DAY_ALL_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+_TPEX_DAILY_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+_MAX_CONCURRENCY = 4     # FinMind 免費版限流，並發壓低
+_REQUEST_GAP = 0.35      # 每次請求後小睡（秒）
+
 COND_MARK = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥"}
+_DEBUG_PATH = Path(__file__).resolve().parent / "_potential_debug.txt"
 
 
 @dataclass(frozen=True)
 class PotentialCandidate:
     code: str
     name: str
-    trade_value: float       # 今日成交值（close×量），活躍度排序用
+    trade_value: float       # 今日成交值（元），活躍度排序用
     close: float
     score: int
     conds: tuple[int, ...]
@@ -67,30 +74,95 @@ class PotentialCandidate:
 @dataclass(frozen=True)
 class PotentialResult:
     candidates: tuple[PotentialCandidate, ...]  # 依 (score, trade_value) 排序
-    scanned: int            # snapshot 報價成功數
-    deep_analyzed: int      # 實際深度分析檔數
+    scanned: int            # 活躍股清單總檔數（TWSE+TPEX）
+    deep_analyzed: int      # 實際抓到日線、完成計分的檔數
     min_score: int
 
 
-_MARKET_CLOSE = dtime(13, 35)   # 台股 13:30 收盤 + 緩衝
+def _is_common_stock(code: str) -> bool:
+    """4 位數字、非 00 開頭（濾掉 ETF/權證/債券）。"""
+    return len(code) == 4 and code.isdigit() and not code.startswith("00")
 
 
-def _market_closed_now() -> bool:
-    """當前是否已過今日收盤（含週末視為已收，最後一根即完整日線）。"""
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    if now.weekday() >= 5:
-        return True
-    return now.time() >= _MARKET_CLOSE
+def _to_num(x) -> float:
+    return pd.to_numeric(str(x).replace(",", "").strip(), errors="coerce")
 
 
-def _trim_forming(df: pd.DataFrame) -> pd.DataFrame:
-    """盤中時剔除「今天形成中的半根 K」→ 只用已收完的日線評分（潛力股本質是收盤級篩選）。"""
-    if df.empty or _market_closed_now():
-        return df
-    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
-    if df.index[-1].date() == today:
-        return df.iloc[:-1]
-    return df
+async def _fetch_twse_liquid() -> dict[str, tuple[str, float]]:
+    """{code: (name, trade_value)} 上市。"""
+    try:
+        async with httpx.AsyncClient(timeout=40) as c:
+            r = await c.get(_TWSE_DAY_ALL_URL, headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"})
+        rows = r.json()
+    except Exception:
+        return {}
+    out: dict[str, tuple[str, float]] = {}
+    for d in rows:
+        code = str(d.get("Code", "")).strip()
+        tv = _to_num(d.get("TradeValue"))
+        if _is_common_stock(code) and pd.notna(tv):
+            out[code] = (str(d.get("Name", "")).strip(), float(tv))
+    return out
+
+
+async def _fetch_tpex_liquid() -> dict[str, tuple[str, float]]:
+    """{code: (name, trade_value)} 上櫃。"""
+    try:
+        async with httpx.AsyncClient(timeout=40) as c:
+            r = await c.get(_TPEX_DAILY_URL, headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"})
+        rows = r.json()
+    except Exception:
+        return {}
+    out: dict[str, tuple[str, float]] = {}
+    for d in rows:
+        code = str(d.get("SecuritiesCompanyCode", "")).strip()
+        tv = _to_num(d.get("TransactionAmount"))
+        if _is_common_stock(code) and pd.notna(tv):
+            out[code] = (str(d.get("CompanyName", "")).strip(), float(tv))
+    return out
+
+
+async def _build_universe(top_n: int) -> tuple[list[tuple[str, str, float]], int]:
+    """回傳 (依成交值排序的前 top_n 檔, 全市場活躍檔數)。"""
+    twse, tpex = await asyncio.gather(_fetch_twse_liquid(), _fetch_tpex_liquid())
+    merged = {**twse, **tpex}
+    ranked = sorted(merged.items(), key=lambda kv: kv[1][1], reverse=True)
+    top = [(code, nm, tv) for code, (nm, tv) in ranked[:top_n]]
+    return top, len(merged)
+
+
+_sema = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+
+async def _finmind_get(dataset: str, data_id: str, start_date: str) -> pd.DataFrame:
+    """免費直連 FinMind（不帶 token）；失敗回空 DataFrame。"""
+    params = {"dataset": dataset, "data_id": data_id, "start_date": start_date}
+    async with _sema:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(_FINMIND_URL, params=params)
+            payload = resp.json()
+        except Exception:
+            return pd.DataFrame()
+        finally:
+            await asyncio.sleep(_REQUEST_GAP)
+    if payload.get("status") != 200:
+        return pd.DataFrame()
+    return pd.DataFrame(payload.get("data", []))
+
+
+async def _fetch_ohlcv(code: str) -> pd.DataFrame:
+    start = (datetime.today() - timedelta(days=_PRICE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    df = await _finmind_get(_PRICE_DATASET, code, start)
+    need = {"date", "open", "max", "min", "close", "Trading_Volume"}
+    if df.empty or not need.issubset(df.columns):
+        return pd.DataFrame()
+    out = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
+    out = out[["date", "open", "high", "low", "close", "volume"]].copy()
+    out["date"] = pd.to_datetime(out["date"])
+    for col in ("open", "high", "low", "close", "volume"):
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
 
 
 def _rsi(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
@@ -157,61 +229,42 @@ def _score_df(df: pd.DataFrame) -> tuple[int, list[int], float, float, float]:
     return len(conds), conds, float(rsi.iloc[-1]), fib_retr, vol_ratio
 
 
-def _active_contracts(api) -> list:
-    """上市(TSE)+上櫃(OTC) 普通股：4 碼純數字、首碼非 0（排除 ETF/權證/特別股）。"""
-    out = []
-    for board in (api.Contracts.Stocks.TSE, api.Contracts.Stocks.OTC):
-        for c in board:
-            code = getattr(c, "code", "") or ""
-            if len(code) == 4 and code.isdigit() and code[0] != "0":
-                out.append(c)
-    return out
+async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
+    """跑潛力股 6 條件掃描（TWSE/TPEX 取活躍股 + FinMind 日線計分）。"""
+    universe, total = await _build_universe(TOP_N)
 
+    async def _one(code: str, name: str, tv: float) -> PotentialCandidate | None:
+        df = await _fetch_ohlcv(code)
+        if df.empty:
+            return None
+        score, conds, rsi, fib, vr = _score_df(df)
+        return PotentialCandidate(
+            code=code, name=name, trade_value=tv, close=float(df["close"].iloc[-1]),
+            score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
+        )
 
-def _sync_scan(min_score: int) -> PotentialResult:
-    api = _get_api()
-    contracts = _active_contracts(api)
-    by_code = {c.code: c for c in contracts}
-
-    scanned = 0
-    raw: list[tuple[str, float, float]] = []  # (code, close, trade_value)
-    for i in range(0, len(contracts), _SNAPSHOT_BATCH):
-        try:
-            snaps = api.snapshots(contracts[i:i + _SNAPSHOT_BATCH])
-        except Exception:
-            continue
-        for s in snaps or []:
-            vol = int(getattr(s, "total_volume", 0) or 0)
-            if vol <= 0:
-                continue
-            scanned += 1
-            close = float(getattr(s, "close", 0.0) or 0.0)
-            raw.append((str(getattr(s, "code", "")), close, close * vol))
-
-    # 中大型活躍股：依今日成交值排序，只深掃前 DEEP_LIMIT 檔
-    raw.sort(key=lambda x: x[2], reverse=True)
-    deep = raw[:DEEP_LIMIT]
-    survivors: list[PotentialCandidate] = []
-    for code, close, tv in deep:
-        try:
-            df = _trim_forming(_sync_fetch_daily(code, DAILY_LOOKBACK))
-            score, conds, rsi, fib, vr = _score_df(df)
-        except Exception:
-            continue
-        if score >= min_score:
-            survivors.append(PotentialCandidate(
-                code=code, name=(getattr(by_code.get(code), "name", "") or code),
-                trade_value=tv, close=float(df["close"].iloc[-1]),  # 評分那根的收盤(剔半根後)
-                score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
-            ))
-
-    survivors.sort(key=lambda c: (c.score, c.trade_value), reverse=True)
-    return PotentialResult(
-        candidates=tuple(survivors), scanned=scanned,
-        deep_analyzed=len(deep), min_score=min_score,
+    results = await asyncio.gather(*[_one(c, n, tv) for c, n, tv in universe])
+    scored = [r for r in results if r is not None]
+    survivors = sorted(
+        [r for r in scored if r.score >= min_score],
+        key=lambda r: (r.score, r.trade_value), reverse=True,
     )
 
+    # 輕量診斷（確認掃描健康度）
+    try:
+        hist = {i: 0 for i in range(7)}
+        for r in scored:
+            hist[r.score] = hist.get(r.score, 0) + 1
+        _DEBUG_PATH.write_text(
+            f"min_score={min_score} universe={total} top_n={len(universe)} "
+            f"got_data={len(scored)} no_data={len(universe) - len(scored)}\n"
+            f"score_hist(0..6)={[hist[i] for i in range(7)]}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
-async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
-    """跑潛力股 6 條件掃描（snapshot 取活躍股 + 逐檔日線計分）。在 thread 執行不阻塞 event loop。"""
-    return await asyncio.to_thread(_sync_scan, min_score)
+    return PotentialResult(
+        candidates=tuple(survivors), scanned=total,
+        deep_analyzed=len(scored), min_score=min_score,
+    )
