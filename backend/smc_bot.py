@@ -102,7 +102,11 @@ from backend.shioaji_fetcher import (
 )
 from backend.momentum_scan import scan as run_momentum_scan, MIN_CHANGE_PCT
 from backend.momentum_scan import bowl_scan as run_bowl_scan
-from backend.potential_scan import scan as run_potential_scan, COND_MARK, DEFAULT_MIN_SCORE
+from backend.potential_scan import (
+    scan as run_potential_scan,
+    scan_strong as run_strong_scan,
+    COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT,
+)
 from backend import diamond_score
 from backend import pe_valuation
 from backend import pullback_check
@@ -586,23 +590,32 @@ class SMCBot:
         now = datetime.now(ZoneInfo("Asia/Taipei"))
         await update.message.reply_text(self._format_potential(now, result))
 
-    def _format_potential(self, now, r) -> str:
+    def _format_potential(self, now, r, strong: bool = False) -> str:
         hhmm = now.strftime("%m-%d %H:%M")
+        if strong:
+            title = f"🚀 強勢股 /strong  {hhmm}"
+            pool = f"掃 {r.scanned} 檔漲幅≥{STRONG_PCT:.0f}%，深掃 {r.deep_analyzed} 檔"
+            lower = "目前無達標個股，可降門檻：/strong 3"
+        else:
+            title = f"🔭 潛力股 /potential  {hhmm}"
+            pool = f"掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股"
+            lower = "目前無達標個股，可降門檻：/potential 3"
         head = [
-            f"🔭 潛力股 /potential  {hhmm}",
+            title,
             "條件 ①量放大 ②均線多頭 ③布林開口 ④斐波回調 ⑤RSI翻揚 ⑥MACD金叉",
-            f"≥{r.min_score} 分：{len(r.candidates)} 檔（掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股）",
+            f"≥{r.min_score} 分：{len(r.candidates)} 檔（{pool}）",
         ]
         if not r.candidates:
             head.append("")
-            head.append("目前無達標個股，可降門檻：/potential 3")
+            head.append(lower)
             return "\n".join(head)
         lines = head + [""]
         for idx, c in enumerate(r.candidates[: self._SCAN_MAX_ROWS], 1):
             marks = "".join(COND_MARK[x] for x in c.conds)
             fib = f"回調{c.fib_retr*100:.0f}%" if c.fib_retr == c.fib_retr else "回調—"  # NaN check
+            pct = f" ▲{c.pct_change:.1f}%" if strong else ""
             lines.append(
-                f"{idx}. {c.code} {c.name}  {c.score}分 {marks}"
+                f"{idx}. {c.code} {c.name}  {c.score}分 {marks}{pct}"
             )
             lines.append(
                 f"   收{c.close:,.2f} 量{c.vol_ratio:.1f}× RSI{c.rsi:.0f} {fib}"
@@ -613,6 +626,29 @@ class SMCBot:
         lines.append("")
         lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
         return "\n".join(lines)
+
+    # ── 強勢股 6 條技術特性 /strong（當日漲幅≥5% + 計分）─────────────────────────
+
+    async def cmd_strong_scan(self, update, context):
+        """強勢股掃描：當日漲幅≥5% 再套 6 條技術特性計分。/strong [最低分]（預設 4）。"""
+        min_score = DEFAULT_MIN_SCORE
+        if context.args:
+            try:
+                min_score = max(1, min(6, int(context.args[0])))
+            except ValueError:
+                pass
+        await update.message.reply_text(
+            f"🚀 強勢股掃描中…（漲幅≥{STRONG_PCT:.0f}% 活躍股逐檔日線計分，門檻 {min_score} 分）"
+        )
+        try:
+            result = await run_strong_scan(min_score)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_potential(now, result, strong=True))
 
     # ── 鑽豹評鑒 /dia ─────────────────────────────────────────────────────────
 
@@ -1445,6 +1481,7 @@ class SMCBot:
             BotCommand("scan", "🎯 當沖選股(漲幅+均線+量能+型態)"),
             BotCommand("bowl", "🥣 碗型整理+爆量突破(不設漲幅門檻)"),
             BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
+            BotCommand("strong", "🚀 強勢股(當日漲幅≥5%)再套6條技術特性計分"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
@@ -1484,6 +1521,7 @@ class SMCBot:
         app.add_handler(CommandHandler("scan", self.cmd_daytrade_scan))
         app.add_handler(CommandHandler("bowl", self.cmd_bowl_scan))
         app.add_handler(CommandHandler("potential", self.cmd_potential_scan))
+        app.add_handler(CommandHandler("strong", self.cmd_strong_scan))
         app.add_handler(CommandHandler("dia", self.cmd_diamond))
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))

@@ -43,6 +43,7 @@ MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 CROSS_WINDOW = 3         # ⑥ 金叉回看天數
 MIN_BARS = FIB_LOOKBACK + 5
 TOP_N = 150              # 中大型活躍股：依今日成交值排序、只深掃前 N 檔（FinMind 免費匿名層上限保守值）
+STRONG_PCT = 5.0         # 強勢股門檻：當日漲幅 ≥ 5%
 DEFAULT_MIN_SCORE = 4
 
 # ── FinMind / 交易所 OpenAPI ──────────────────────────────────────────────
@@ -69,6 +70,7 @@ class PotentialCandidate:
     rsi: float
     fib_retr: float          # 回調比例（NaN=無有效波段）
     vol_ratio: float         # 今日量 / 20日均量
+    pct_change: float = 0.0  # 今日漲幅%（強勢股用；潛力股不計）
 
 
 @dataclass(frozen=True)
@@ -88,47 +90,64 @@ def _to_num(x) -> float:
     return pd.to_numeric(str(x).replace(",", "").strip(), errors="coerce")
 
 
-async def _fetch_twse_liquid() -> dict[str, tuple[str, float]]:
-    """{code: (name, trade_value)} 上市。"""
+def _pct_change(close, change) -> float:
+    """當日漲幅% = change /(close-change)*100；無法計算回 NaN。"""
+    c, ch = _to_num(close), _to_num(change)
+    prev = c - ch
+    if pd.isna(c) or pd.isna(ch) or prev <= 0:
+        return float("nan")
+    return float(ch / prev * 100)
+
+
+async def _fetch_twse_liquid() -> dict[str, tuple[str, float, float]]:
+    """{code: (name, trade_value, pct)} 上市。"""
     try:
         async with httpx.AsyncClient(timeout=40) as c:
             r = await c.get(_TWSE_DAY_ALL_URL, headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"})
         rows = r.json()
     except Exception:
         return {}
-    out: dict[str, tuple[str, float]] = {}
+    out: dict[str, tuple[str, float, float]] = {}
     for d in rows:
         code = str(d.get("Code", "")).strip()
         tv = _to_num(d.get("TradeValue"))
         if _is_common_stock(code) and pd.notna(tv):
-            out[code] = (str(d.get("Name", "")).strip(), float(tv))
+            pct = _pct_change(d.get("ClosingPrice"), d.get("Change"))
+            out[code] = (str(d.get("Name", "")).strip(), float(tv), pct)
     return out
 
 
-async def _fetch_tpex_liquid() -> dict[str, tuple[str, float]]:
-    """{code: (name, trade_value)} 上櫃。"""
+async def _fetch_tpex_liquid() -> dict[str, tuple[str, float, float]]:
+    """{code: (name, trade_value, pct)} 上櫃。"""
     try:
         async with httpx.AsyncClient(timeout=40) as c:
             r = await c.get(_TPEX_DAILY_URL, headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"})
         rows = r.json()
     except Exception:
         return {}
-    out: dict[str, tuple[str, float]] = {}
+    out: dict[str, tuple[str, float, float]] = {}
     for d in rows:
         code = str(d.get("SecuritiesCompanyCode", "")).strip()
         tv = _to_num(d.get("TransactionAmount"))
         if _is_common_stock(code) and pd.notna(tv):
-            out[code] = (str(d.get("CompanyName", "")).strip(), float(tv))
+            pct = _pct_change(d.get("Close"), d.get("Change"))
+            out[code] = (str(d.get("CompanyName", "")).strip(), float(tv), pct)
     return out
 
 
-async def _build_universe(top_n: int) -> tuple[list[tuple[str, str, float]], int]:
-    """回傳 (依成交值排序的前 top_n 檔, 全市場活躍檔數)。"""
+async def _build_universe(top_n: int, min_pct: float | None = None) -> tuple[list[tuple[str, str, float, float]], int]:
+    """回傳 (依成交值排序的前 top_n 檔[code,name,trade_value,pct], 母體檔數)。
+
+    min_pct 有給時先濾掉「當日漲幅 < min_pct」的，再依成交值排序取前 top_n（強勢股用）。
+    """
     twse, tpex = await asyncio.gather(_fetch_twse_liquid(), _fetch_tpex_liquid())
     merged = {**twse, **tpex}
-    ranked = sorted(merged.items(), key=lambda kv: kv[1][1], reverse=True)
-    top = [(code, nm, tv) for code, (nm, tv) in ranked[:top_n]]
-    return top, len(merged)
+    items = list(merged.items())
+    if min_pct is not None:
+        items = [kv for kv in items if pd.notna(kv[1][2]) and kv[1][2] >= min_pct]
+    ranked = sorted(items, key=lambda kv: kv[1][1], reverse=True)
+    top = [(code, nm, tv, pct) for code, (nm, tv, pct) in ranked[:top_n]]
+    return top, len(items)
 
 
 _sema = asyncio.Semaphore(_MAX_CONCURRENCY)
@@ -229,11 +248,11 @@ def _score_df(df: pd.DataFrame) -> tuple[int, list[int], float, float, float]:
     return len(conds), conds, float(rsi.iloc[-1]), fib_retr, vol_ratio
 
 
-async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
-    """跑潛力股 6 條件掃描（TWSE/TPEX 取活躍股 + FinMind 日線計分）。"""
-    universe, total = await _build_universe(TOP_N)
+async def _scan(min_score: int, min_pct: float | None) -> PotentialResult:
+    """共用掃描核心：min_pct=None→活躍股(潛力股)；min_pct=5→強勢股。"""
+    universe, total = await _build_universe(TOP_N, min_pct=min_pct)
 
-    async def _one(code: str, name: str, tv: float) -> PotentialCandidate | None:
+    async def _one(code: str, name: str, tv: float, pct: float) -> PotentialCandidate | None:
         df = await _fetch_ohlcv(code)
         if df.empty:
             return None
@@ -241,9 +260,10 @@ async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
         return PotentialCandidate(
             code=code, name=name, trade_value=tv, close=float(df["close"].iloc[-1]),
             score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
+            pct_change=(pct if pd.notna(pct) else 0.0),
         )
 
-    results = await asyncio.gather(*[_one(c, n, tv) for c, n, tv in universe])
+    results = await asyncio.gather(*[_one(c, n, tv, pct) for c, n, tv, pct in universe])
     scored = [r for r in results if r is not None]
     survivors = sorted(
         [r for r in scored if r.score >= min_score],
@@ -268,3 +288,13 @@ async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
         candidates=tuple(survivors), scanned=total,
         deep_analyzed=len(scored), min_score=min_score,
     )
+
+
+async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
+    """潛力股：全市場活躍股(成交值前 N) + 6 條件計分。"""
+    return await _scan(min_score, min_pct=None)
+
+
+async def scan_strong(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
+    """強勢股：當日漲幅 ≥ STRONG_PCT% 的活躍股 + 6 條件計分。"""
+    return await _scan(min_score, min_pct=STRONG_PCT)
