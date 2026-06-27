@@ -131,9 +131,10 @@ C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.
 ### 1.8 潛力股掃描器（2026-06-27）`sector/breakout_scan.py`
 依選股總結圖 6 條技術特性對「中大型活躍股」計分(0-6)排名。活躍股清單＝TWSE `STOCK_DAY_ALL` + TPEX `tpex_mainboard_daily_close_quotes` 各一次、用成交值排序取前 N(上市+上櫃都涵蓋)。6 條：①量≥1.5×20日均量 ②MA20上彎且價在上 ③布林帶寬放大且價在中軌上 ④近60日波段回調落 38.2~61.8% ⑤RSI(14)45~60且翻揚 ⑥近3日MACD柱由負翻正(金叉)。**6 條互斥(③突破 vs ④拉回不會同日成立)故用計分非 AND**；中④=拉回找買點型、中⑥=已啟動追勢型。CLI：`.venv/Scripts/python.exe -m sector.breakout_scan --top 200 --min-score 4 --csv ...`。
 
-**已移植進 backend 做成 smc_bot `/potential` 指令**（`backend/potential_scan.py`，2026-06-27）：改用 Shioaji 還原日線、複用 smc_bot 已登入連線（**不另開 session 免撞 451 Too Many Connections**）、涵蓋 TSE+OTC、依今日成交值取前 150 活躍股深掃。計分邏輯與免費版一致。`/potential [最低分]` 預設 4。
+**已移植進 backend 做成 smc_bot `/potential` 指令**（`backend/potential_scan.py`，2026-06-27）：活躍股清單＝TWSE `STOCK_DAY_ALL` + TPEX OpenAPI 依成交值取前 150；個股日線＝**FinMind 免費匿名（不帶 token、非還原）**。計分 6 條與免費版一致。`/potential [最低分]` 預設 4。實測 2337 旺宏=5分①②③④⑤、6191 精成科=5分①②③④⑤，與 breakout_scan 一致。
 
-⚠️ **盤中半根 K 坑（2026-06-27 踩到並修）**：Shioaji 是**即時**的，盤中跑 `/potential` 時最後一根日線是「**當天形成中、只累積到當下的半根 K**」→ ① 量放大（今日量 vs 20日整天均量）幾乎全廢、收盤價未定讓 ②③④⑤ 全飄 → **全市場集體摜破門檻、掃出 0 檔**，跟早上 FinMind（收盤後才更新、評完整日線）結果天差地遠。**潛力股是收盤級篩選**：`_trim_forming()` 在 13:35 前自動剔除今天那根半 K、改評前一完整交易日，收盤後才用當天。**通則：任何「即時資料源 + 日線型態/量能篩選」都要先確認最後一根 K 是否已收完，否則量能/型態判斷全錯。**
+❌ **Shioaji kbars 單次上限 30 天（2026-06-27 踩到，根因）**：原本想用 Shioaji 抓日線（複用 bot 連線免 451），但 `api.kbars(start, end)` 的 date range **單次最多 30 天**，超過直接回 `HTTP 400 'Kbars date range must not exceed 30 days.'`。`_sync_fetch_daily` 一次要 `lookback*2+30=270` 天 → **每檔 400、150 檔全被 `except: continue` 靜默吞掉 → 永遠 0 檔**，降門檻也沒用。**diagnosis 教訓**：別猜，埋診斷（score_hist 全 0 + 抓 traceback）一次就看到真因；`except: continue` 吞錯是隱形殺手，掃描器務必把前幾個例外寫出來。**Shioaji 適合「即時快照/分鐘 K」，不適合「一次抓幾百天日線」** → 日線級全市場掃描改用 FinMind/交易所 OpenAPI。連帶好處：FinMind 是收盤級資料、天生無「盤中半根 K」問題（不需 `_trim_forming`）。
+通則：①即時資料源（Shioaji）做日線型態/量能篩選前，先確認資料窗夠不夠、最後一根是否已收完；②長窗歷史日線優先用 FinMind/OpenAPI。
 
 ---
 
