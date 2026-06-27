@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -68,6 +70,27 @@ class PotentialResult:
     scanned: int            # snapshot 報價成功數
     deep_analyzed: int      # 實際深度分析檔數
     min_score: int
+
+
+_MARKET_CLOSE = dtime(13, 35)   # 台股 13:30 收盤 + 緩衝
+
+
+def _market_closed_now() -> bool:
+    """當前是否已過今日收盤（含週末視為已收，最後一根即完整日線）。"""
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    if now.weekday() >= 5:
+        return True
+    return now.time() >= _MARKET_CLOSE
+
+
+def _trim_forming(df: pd.DataFrame) -> pd.DataFrame:
+    """盤中時剔除「今天形成中的半根 K」→ 只用已收完的日線評分（潛力股本質是收盤級篩選）。"""
+    if df.empty or _market_closed_now():
+        return df
+    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    if df.index[-1].date() == today:
+        return df.iloc[:-1]
+    return df
 
 
 def _rsi(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
@@ -171,14 +194,14 @@ def _sync_scan(min_score: int) -> PotentialResult:
     survivors: list[PotentialCandidate] = []
     for code, close, tv in deep:
         try:
-            df = _sync_fetch_daily(code, DAILY_LOOKBACK)
+            df = _trim_forming(_sync_fetch_daily(code, DAILY_LOOKBACK))
             score, conds, rsi, fib, vr = _score_df(df)
         except Exception:
             continue
         if score >= min_score:
             survivors.append(PotentialCandidate(
                 code=code, name=(getattr(by_code.get(code), "name", "") or code),
-                trade_value=tv, close=close if close > 0 else float(df["close"].iloc[-1]),
+                trade_value=tv, close=float(df["close"].iloc[-1]),  # 評分那根的收盤(剔半根後)
                 score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
             ))
 
