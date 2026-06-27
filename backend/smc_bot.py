@@ -1444,6 +1444,7 @@ class SMCBot:
             BotCommand("gainers", "🔥 今日上市漲幅 ≥5% 強勢股"),
             BotCommand("scan", "🎯 當沖選股(漲幅+均線+量能+型態)"),
             BotCommand("bowl", "🥣 碗型整理+爆量突破(不設漲幅門檻)"),
+            BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
