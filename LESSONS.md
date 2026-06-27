@@ -126,6 +126,10 @@ C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.
 - **TWSE 官方 OpenAPI（`openapi.twse.com.tw`）定位＝當日快照、只上市**：實測 `STOCK_DAY_ALL` 只有**當天一筆**（無歷史）、且**只含上市股**（CPO 15 檔裡 6 檔上櫃 3081/3105/3163/3363/4908/4979 抓不到，要另接 tpex.org.tw）。**不能當歷史骨幹**，只適合「收盤後補上市股當日那一根」。無 token、永不過期是它的優點。
 - **最終架構決定**：**FinMind 免費非還原當歷史骨幹（全涵蓋）+ TWSE OpenAPI 補上市股當日收盤**（TWSE 領先才覆蓋；上櫃維持 FinMind）。
 - **CapitalStock 單位**：`TaiwanStockBalanceSheet` 的 `CapitalStock` value 是**元**（2330≈2593 億），股數=value/10。市值加權最後 rebase 到 100，**只要各股股數尺度一致、絕對值不影響權重**。（註：`strategy/fundamental.py` 註解寫「千元 → /10*1000」，與此處直連拿到的尺度不同，別混用。）
+- **FinMind 免費匿名層單批 ~200 次就被擋**（做「潛力股掃描」`sector/breakout_scan.py` 踩到）：一檔一檔抓日線，前 ~216 檔正常、之後**連續全部 400/抓不到**＝速率上限，不是 bug。**單批掃描股數壓在 200 內最穩**（`--top 200`，已設為預設）。要掃更多就分批 + 間隔，或貼付費 token。`by-date 一次撈全市場`也是付費功能（free 回 `Your level is free`）。
+
+### 1.8 潛力股掃描器（2026-06-27）`sector/breakout_scan.py`
+依選股總結圖 6 條技術特性對「中大型活躍股」計分(0-6)排名。活躍股清單＝TWSE `STOCK_DAY_ALL` + TPEX `tpex_mainboard_daily_close_quotes` 各一次、用成交值排序取前 N(上市+上櫃都涵蓋)。6 條：①量≥1.5×20日均量 ②MA20上彎且價在上 ③布林帶寬放大且價在中軌上 ④近60日波段回調落 38.2~61.8% ⑤RSI(14)45~60且翻揚 ⑥近3日MACD柱由負翻正(金叉)。**6 條互斥(③突破 vs ④拉回不會同日成立)故用計分非 AND**；中④=拉回找買點型、中⑥=已啟動追勢型。CLI：`.venv/Scripts/python.exe -m sector.breakout_scan --top 200 --min-score 4 --csv ...`。
 
 ---
 
