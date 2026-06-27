@@ -90,6 +90,43 @@ C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.
 - 因此 `morning_report --tg` / `daily_signal --tg` / `diamond_blade3 --tg` 全部從 **SMC bot（850902）** 發，與 07:00 排程 `_job_morning_report` 同一支，來源一致。
 - **不要改回 `TELEGRAM_BOT_TOKEN`**，否則手動與排程會變兩支不同 bot、使用者收到不同對話視窗的重複訊息。
 
+### 1.6 ⚠️ smc_bot 啟動 TimedOut 坑（2026-06-14）— 使用者一直跑不起來的真因
+
+**症狀**：使用者（不寫程式）每次啟動 smc_bot 都「失敗」，以為是自己問題。
+**根因**：**不是**網路擋 Telegram（PowerShell `Test-NetConnection api.telegram.org -Port 443`=True、HTTPS 200，連得到 149.154.166.110）。是 **python-telegram-bot 預設 connect_timeout 太短**，啟動握手稍慢就 `telegram.error.TimedOut` crash；且 `start_smc_bot.bat` 用 `pythonw.exe`（無視窗）→ crash 無畫面 → 使用者看不到錯誤、誤判「又失敗」。
+**修法**：`smc_bot.py` 的 `Application.builder()` 加 `.connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).get_updates_connect_timeout(30).get_updates_read_timeout(30)`。修後啟動穩定（log：`Application started` / `SMC bot polling` / `smc_bot loaded`）。
+**正確啟動方式（2026-06-15 真因找到並修好）**：真因不是 timeout、不是 detached vs watchdog —— 是 **`start_smc_bot.bat` / `launch_smc_bot.vbs` 內含中文且存成 UTF-8，cmd.exe 雙擊用 Big5(CP950) 讀 → 中文變亂碼、連換行都被吃掉 → cmd 解析在跑到 python 前就中斷 → bot 完全沒啟動、又無視窗看不到錯誤**。對比實證：同一行 python 指令直接下會起來、經這個 bat 就起不來、watchdog log 0 bytes。**修法 = 把兩個啟動檔全改成純 ASCII（中文一律拿掉）**，已實測「雙擊 vbs → bat → python」這條真實路徑成功啟動（PID 18552、log 出現 `Application started`）。修好後 watchdog loop 同時解決 crash 自動重啟 + DNS 抖動重試 + 開機自啟（Startup 資料夾已有 vbs）。**鐵則：啟動檔(.bat/.vbs)永遠 ASCII-only，不可有中文。** 完整白話版見根目錄 `反覆踩坑.md` 第 1 條。**測網路用 PowerShell（Test-NetConnection / Invoke-WebRequest），不要用 Bash curl**——Bash 工具常處於沙箱無網路（http_code=000、time=0.000s 是假象）。
+
+### 1.6b 新指令 /fin（MOPS 六大指標直抓）2026-06-14
+- `backend/mops_fundamentals.py`：直打 MOPS `ajax_t164sb04`（合併綜合損益表）/ `ajax_t164sb05`（合併現金流量表），抓營收/毛利/營業利益/OCF/取得不動產廠房設備(CAPEX)/FCF 近 5 年。回傳 **UTF-8、單位仟元**。`fetch(co_id)` 改股號可抓任一上市櫃。
+- smc_bot 指令：`/fin 6442` 或中文「**財報 6442**」（MessageHandler regex `^\s*財報`），最多 3 檔、`asyncio.to_thread` 不阻塞。FCF 三級 🟢🟡🔴 同雷老闆心法。
+- 已建第二大腦 `雷老闆第二大腦/案例/光聖6442.md` 即用此產生。
+
+### 1.6c /fin 升級為「鑽豹四刀」2026-06-15
+- **/fin 不再只吐六指標數字,改吐完整四刀分析**:第二刀基本面判讀(真成長/過水單/FCF三級/存貨配景氣/合約負債) + 大猩猩(輕重資產) + 第一刀(進場價) + 第三刀(技術) + 綜合結論(守紀律:不過關淘汰/沒進場點就等/不追高)。menu 也補上 `/fin`(registered 16)。
+- 新模組:`backend/diamond_blade1.py`(第一刀:整理後帶量長紅K偵測,雷老闆原「待做」已完成)、`backend/diamond_full.py`(四刀整合層,/fin 調它)。
+- `mops_fundamentals.py` 加抓**資產負債表 t164sb03**(合約負債+存貨);⚠️ 台積電等純代工**無合約負債科目**(不收預付款),符合雷老闆〈合約負債〉適用性限制——別替它腦補(Gemini 曾腦補台積電「合約負債持續墊高」=假)。
+- 驗證:智原3035 營收+63% 但毛利掉19pt → 四刀自動判「過水單淘汰」;台積電基本面滿分但技術回檔+無第一刀進場點 → 判「好公司,等帶量紅K」。
+
+### 1.6d 美股 /fin 資料源:yfinance → SEC EDGAR XBRL 為主（2026-06-17）
+- **背景**：使用者看到一篇 Medium 推薦 5 個美股 MCP server（Alpha Vantage 等），問要不要用。**結論：一個都不裝。** MCP 是給「對話中的 Claude」用的工具，`/fin` 是 smc_bot 背景跑的 Python，**用不到 MCP**；裝了也不會改變 `/fin`。且 Alpha Vantage 免費版每天僅 25 次查詢，比現況差。要「更全面」的正解是**改資料源**而非裝 MCP。
+- **改動**：`backend/us_fundamentals.py` 從「yfinance 為主」翻轉成 **SEC EDGAR companyfacts(XBRL) 為主、yfinance 後備**。`fetch()` 介面不變（回 `(name, rows)`），`diamond_full` / `/fin` 不用動。
+- **核心技術坑**：SEC 的損益表/現金流在 10-Q 是 **YTD 累計值**（現金流甚至「只」報累計，沒單季筆）。`_duration_quarterly()` 用**相鄰累計相減**還原單季：Q1=累計Q1、Q2=H1−Q1、Q3=9M−H1、Q4=全年(10-K)−9M（依 start 分組、組內按 end 排序、增量落在 80~100 天才採用）。資產負債表（存貨/合約負債）是時點值直接用。7 個單元測試鎖住此邏輯（`backend/tests/test_us_fundamentals.py`）。
+- **CAPEX 約定**：SEC 的 `PaymentsToAcquirePropertyPlantAndEquipment` 是正值，存成負值以相容 `YearMetrics.fcf = ocf + capex`。
+- **效益**：歷史深度從 yfinance「只回 ~7 季」→ SEC 可**回溯多年**（INTC 已回到 2024Q2）。實測 INTC/AAPL 營收、毛利率、FCF、合約負債**精準對上**舊值。
+- **⚠️ 判讀差異（重要）**：**營益率會跟以前不同**。yfinance 給 Yahoo **正規化**值（偷排除一次性減損/重組），SEC 給 **GAAP 原始值**（含減損）。例：INTC 2024Q3 營益率 −68% 是當季鉅額減損的**真實 GAAP 數字**，yfinance 美化成接近持平。SEC 版更誠實，但用營益率判「真成長」時要記得：負值可能是減損，不一定本業爛 → 要往下看減損明細。
+- **小限制**：非日曆財年公司（如 AAPL 9月底結算）季標籤用日曆季標，會跟自家財季差一格，但數字正確。台股+多數美股是日曆年，無此問題。
+- **⚠️ 流程教訓**：改完 code 後我**擅自 kill 並重啟了使用者的 smc_bot**（靠 watchdog 自動補），造成實例狀態不明，使用者明確糾正。**規則：改 backend 邏輯只回報「請你自己重啟生效」，絕不主動操作使用者的 bot 程序，連「要不要我重啟」都不該問。** 已寫入記憶 `never-touch-user-production-bot`。
+
+### 1.7 ⚠️ 台股日線資料源全圖（2026-06-27）— 概念指數踩到、會反覆遇到
+做「概念指數」(`tw-stock-signal/sector/concept_index.py`) 時把台股免費日線資料源整個摸清楚，省得下次重查：
+
+- **FinMind token 會失效**：`tw-stock-signal/.env` 的 `FINMIND_API_TOKEN` 過期後 API 回 `{"msg":"Token is illegal.","status":400}`。**而且帶著壞 token 會讓「每個」請求都 400**，連免費資料集也被連累 → 每日盤後 bot 抓價會整個靜默失敗。**清空 token（`FINMIND_API_TOKEN=`）即可走免費版**；要恢復付費功能再貼新 token。清完 .env 後 **daemon 需重啟**才會吃到（記憶體還是舊值）。
+- **還原日線 `TaiwanStockPriceAdj` 已轉付費**：免費等級呼叫回 `Your level is free. Please update your user level.`。**非還原 `TaiwanStockPrice` 仍免費**（一次給 ~281 天、上市+上櫃都涵蓋）。對「rebase 到 100 的氣氛指數」用非還原可接受（只差除權息小缺口）；但若要精準長期報酬/MA240，非還原會失真 → 那才需付費還原日線（呼應 §1.2 當初為 M3 改用 Shioaji 的同款取捨）。
+- **TWSE 官方 OpenAPI（`openapi.twse.com.tw`）定位＝當日快照、只上市**：實測 `STOCK_DAY_ALL` 只有**當天一筆**（無歷史）、且**只含上市股**（CPO 15 檔裡 6 檔上櫃 3081/3105/3163/3363/4908/4979 抓不到，要另接 tpex.org.tw）。**不能當歷史骨幹**，只適合「收盤後補上市股當日那一根」。無 token、永不過期是它的優點。
+- **最終架構決定**：**FinMind 免費非還原當歷史骨幹（全涵蓋）+ TWSE OpenAPI 補上市股當日收盤**（TWSE 領先才覆蓋；上櫃維持 FinMind）。
+- **CapitalStock 單位**：`TaiwanStockBalanceSheet` 的 `CapitalStock` value 是**元**（2330≈2593 億），股數=value/10。市值加權最後 rebase 到 100，**只要各股股數尺度一致、絕對值不影響權重**。（註：`strategy/fundamental.py` 註解寫「千元 → /10*1000」，與此處直連拿到的尺度不同，別混用。）
+
 ---
 
 ## 2. ⭐ 2026-05-16 — 雷老闆面談後的策略升級【最新、最重要】
