@@ -106,6 +106,7 @@ from backend.potential_scan import (
     scan as run_potential_scan,
     scan_strong as run_strong_scan,
     explain_six as run_six_detail,
+    explain_six_compare as run_six_compare,
     COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT,
 )
 from backend import diamond_score
@@ -627,6 +628,20 @@ class SMCBot:
         lines.append("")
         lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
         return "\n".join(lines)
+
+    # ── 六大指標新舊對照 /six ─────────────────────────────────────────────────
+
+    async def cmd_six_compare(self, update, context):
+        """單檔六大指標：現有版 vs 逐字稿(趨勢交易)版逐模塊對照。/six 2344。"""
+        codes = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        if not codes:
+            await update.message.reply_text("用法：/six 2330（單檔六大指標 新舊邏輯對照）")
+            return
+        for code in codes[:5]:
+            try:
+                await update.message.reply_text(await run_six_compare(code))
+            except Exception as exc:
+                await update.message.reply_text(f"{code}:{_safe_err(exc)}")
 
     # ── 強勢股 6 條技術特性 /strong（當日漲幅≥5% + 計分）─────────────────────────
 
@@ -1493,6 +1508,7 @@ class SMCBot:
             BotCommand("bowl", "🥣 碗型整理+爆量突破(不設漲幅門檻)"),
             BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
             BotCommand("strong", "🚀 強勢股(當日漲幅≥5%)再套6條技術特性計分"),
+            BotCommand("six", "🔬 六大指標 新舊對照（/six 2330 現有版 vs 趨勢交易版）"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
@@ -1533,6 +1549,7 @@ class SMCBot:
         app.add_handler(CommandHandler("bowl", self.cmd_bowl_scan))
         app.add_handler(CommandHandler("potential", self.cmd_potential_scan))
         app.add_handler(CommandHandler("strong", self.cmd_strong_scan))
+        app.add_handler(CommandHandler("six", self.cmd_six_compare))
         app.add_handler(CommandHandler("dia", self.cmd_diamond))
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))

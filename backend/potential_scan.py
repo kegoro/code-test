@@ -42,6 +42,15 @@ RSI_LOW, RSI_HIGH = 45.0, 60.0   # ⑤ RSI 止穩帶
 MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 CROSS_WINDOW = 3         # ⑥ 金叉回看天數
 MIN_BARS = FIB_LOOKBACK + 5
+
+# ── 逐字稿版（趨勢交易）新邏輯參數，供 /six 對照 ──────────────────────────────
+NEW_MA_FAST, NEW_MA_SLOW = 50, 200    # ② 節奏線 / 大趨勢線
+NEW_SLOPE_FAST, NEW_SLOPE_SLOW = 5, 20  # 兩條均線各自的上彎判斷窗
+NEW_BB_STD = 2.0          # ③ 上軌 = 中軌 + 2σ（突破上軌才算）
+NEW_FIB_KEYS = (0.382, 0.618)   # ④ 只認 38.2% / 61.8% 兩個關鍵位
+NEW_FIB_TOL = 0.03        # ④ 關鍵位容差 ±3%
+NEW_RSI_MID = 50.0        # ⑤ 50 為多空分界，回測企穩再上
+NEW_MIN_BARS = NEW_MA_SLOW + 25  # 要算 MA200 + 上彎窗
 TOP_N = 150              # 中大型活躍股：依今日成交值排序、只深掃前 N 檔（FinMind 免費匿名層上限保守值）
 STRONG_PCT = 5.0         # 強勢股門檻：當日漲幅 ≥ 5%
 DEFAULT_MIN_SCORE = 4
@@ -370,6 +379,159 @@ async def explain_six(code: str, name: str = "") -> str:
     head = [f"{title} ━━", "（收盤級日線 / FinMind 免費非還原）", f"命中 {score}/6"]
     tail = ["", "③突破 vs ④拉回 互斥不會同時亮；中④=拉回找買點、中⑥=已啟動追勢"]
     return "\n".join(head + [""] + lines + tail)
+
+
+# ── /six：現有版 vs 逐字稿版 逐模塊對照 ────────────────────────────────────
+
+_SIX_NAMES = {1: "成交量", 2: "均線", 3: "布林帶", 4: "斐波回調", 5: "RSI", 6: "MACD"}
+
+
+def _old_compact(df: pd.DataFrame) -> list[tuple[bool, str]]:
+    """現有版 6 條：回傳每條 (命中, 短說明)。"""
+    close, high, low, vol = df["close"], df["high"], df["low"], df["volume"]
+    res: list[tuple[bool, str]] = []
+
+    vol_ma = vol.rolling(MA_PERIOD).mean()
+    vr = float(vol.iloc[-1] / vol_ma.iloc[-1]) if vol_ma.iloc[-1] > 0 else 0.0
+    res.append((vr >= VOL_MULT, f"今量 {vr:.1f}×20日均量（門檻 {VOL_MULT:g}×）"))
+
+    ma = close.rolling(MA_PERIOD).mean()
+    ok = ma.iloc[-1] > ma.iloc[-1 - SLOPE_LOOKBACK] and close.iloc[-1] > ma.iloc[-1]
+    res.append((ok, f"MA20上彎且站上（收{close.iloc[-1]:.1f}/MA20 {ma.iloc[-1]:.1f}）"))
+
+    std = close.rolling(MA_PERIOD).std()
+    bw = (4 * std) / ma
+    ok = bw.iloc[-1] > bw.iloc[-1 - BAND_LOOKBACK] * BAND_OPEN_RATIO and close.iloc[-1] > ma.iloc[-1]
+    res.append((ok, "帶寬放大且收>中軌" if ok else "帶寬未放大/收未過中軌"))
+
+    window = df.iloc[-FIB_LOOKBACK:]
+    after = window.loc[window["low"].idxmin():]
+    fib = float("nan")
+    if len(after) >= 2:
+        sl, sh = float(window["low"].min()), float(after["high"].max())
+        if sh > sl:
+            fib = (sh - close.iloc[-1]) / (sh - sl)
+    ok = fib == fib and FIB_LOW - FIB_TOL <= fib <= FIB_HIGH + FIB_TOL
+    res.append((ok, f"回調 {fib*100:.0f}%（認 33~67% 連續帶）" if fib == fib else "無有效波段"))
+
+    rsi = _rsi(close)
+    ok = RSI_LOW <= rsi.iloc[-1] <= RSI_HIGH and rsi.iloc[-1] > rsi.iloc[-2]
+    res.append((ok, f"RSI {rsi.iloc[-1]:.0f}（認 45~60 且翻揚）"))
+
+    ema_f = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_s = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    hist = (ema_f - ema_s) - (ema_f - ema_s).ewm(span=MACD_SIGNAL, adjust=False).mean()
+    ok = hist.iloc[-1] > 0 and hist.iloc[-1 - CROSS_WINDOW] < 0
+    res.append((ok, f"近{CROSS_WINDOW}日柱由負翻正" if ok else "非近期剛翻正"))
+    return res
+
+
+def _new_compact(df: pd.DataFrame) -> list[tuple[bool, str]]:
+    """逐字稿版（趨勢交易）6 模塊：回傳每條 (命中, 短說明)。"""
+    close, high, low, vol = df["close"], df["high"], df["low"], df["volume"]
+    n = len(df)
+    res: list[tuple[bool, str]] = []
+
+    # ① 量價配合：價漲 且 量增
+    price_up = close.iloc[-1] > close.iloc[-2]
+    vol_ma = vol.rolling(MA_PERIOD).mean()
+    vol_up = vol.iloc[-1] > vol_ma.iloc[-1]
+    ok = price_up and vol_up
+    why = ("價漲且量增（大資金進場）" if ok
+           else ("價漲但量縮（假動作）" if price_up else "今日收黑（無上漲可驗證）"))
+    res.append((ok, why))
+
+    # ② 雙均線多頭：站上 MA50 & MA200，且雙線上彎
+    if n >= NEW_MA_SLOW + NEW_SLOPE_SLOW:
+        ma_f = close.rolling(NEW_MA_FAST).mean()
+        ma_s = close.rolling(NEW_MA_SLOW).mean()
+        above = close.iloc[-1] > ma_f.iloc[-1] and close.iloc[-1] > ma_s.iloc[-1]
+        up_f = ma_f.iloc[-1] > ma_f.iloc[-1 - NEW_SLOPE_FAST]
+        up_s = ma_s.iloc[-1] > ma_s.iloc[-1 - NEW_SLOPE_SLOW]
+        ok = above and up_f and up_s
+        if ok:
+            why = f"站上MA50({ma_f.iloc[-1]:.0f})、MA200({ma_s.iloc[-1]:.0f})且雙線上彎"
+        elif not above:
+            why = f"未同時站上MA50/MA200（收{close.iloc[-1]:.0f}）"
+        else:
+            why = "站上但MA50/MA200未同步上彎"
+        res.append((ok, why))
+    else:
+        res.append((False, f"資料不足算MA200（需≥{NEW_MA_SLOW + NEW_SLOPE_SLOW}根）"))
+
+    # ③ 布林開口 + 突破上軌（中+2σ）
+    ma20 = close.rolling(MA_PERIOD).mean()
+    std20 = close.rolling(MA_PERIOD).std()
+    bw = (2 * NEW_BB_STD * std20) / ma20    # 上下軌間距/中軌
+    upper = ma20 + NEW_BB_STD * std20
+    opening = bw.iloc[-1] > bw.iloc[-1 - BAND_LOOKBACK]
+    broke = close.iloc[-1] > upper.iloc[-1]
+    ok = opening and broke
+    why = ("開口且收盤突破上軌（爆發）" if ok
+           else ("開口但未破上軌" if opening else "帶寬仍收斂（蓄積中）"))
+    res.append((ok, why))
+
+    # ④ 斐波貼近 38.2% 或 61.8% 關鍵位
+    window = df.iloc[-FIB_LOOKBACK:]
+    after = window.loc[window["low"].idxmin():]
+    fib = float("nan")
+    if len(after) >= 2:
+        sl, sh = float(window["low"].min()), float(after["high"].max())
+        if sh > sl:
+            fib = (sh - close.iloc[-1]) / (sh - sl)
+    near = fib == fib and any(abs(fib - k) <= NEW_FIB_TOL for k in NEW_FIB_KEYS)
+    if fib == fib:
+        why = f"回調 {fib*100:.0f}%（{'貼近' if near else '不貼近'} 38.2/61.8%）"
+    else:
+        why = "無有效波段"
+    res.append((near, why))
+
+    # ⑤ RSI 站上50、回測企穩再上彎
+    rsi = _rsi(close)
+    above50 = rsi.iloc[-1] > NEW_RSI_MID
+    rising = rsi.iloc[-1] > rsi.iloc[-2]
+    dipped = float(rsi.iloc[-5:].min()) <= NEW_RSI_MID + 5    # 近5日曾回測到~50
+    ok = above50 and rising and dipped
+    why = (f"RSI {rsi.iloc[-1]:.0f}＞50、回測企穩再上彎" if ok
+           else (f"RSI {rsi.iloc[-1]:.0f}＞50但未見回測企穩翻揚" if above50 else f"RSI {rsi.iloc[-1]:.0f} 在50下方（多頭未掌控）"))
+    res.append((ok, why))
+
+    # ⑥ MACD 柱先縮短 → 金叉
+    ema_f = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_s = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    hist = (ema_f - ema_s) - (ema_f - ema_s).ewm(span=MACD_SIGNAL, adjust=False).mean()
+    crossed = hist.iloc[-1] > 0 and float(hist.iloc[-1 - CROSS_WINDOW:-1].min()) < 0
+    shrank = hist.iloc[-1] > hist.iloc[-2] > hist.iloc[-3]    # 動能柱連續轉強
+    ok = crossed and shrank
+    why = ("空頭柱先縮短後金叉（點火）" if ok
+           else ("已金叉但柱未見先縮短" if crossed else ("柱轉強但尚未金叉（預告）" if shrank else "未見縮短/金叉")))
+    res.append((ok, why))
+    return res
+
+
+async def explain_six_compare(code: str, name: str = "") -> str:
+    """/six：現有版 vs 逐字稿版 逐模塊對照。"""
+    df = await _fetch_ohlcv(code)
+    title = f"🔬 六大指標 新舊對照 {code} {name}".rstrip()
+    if df.empty or len(df) < MIN_BARS:
+        return f"{title}\n資料不足（需 ≥{MIN_BARS} 根日線），略過"
+    old = _old_compact(df)
+    new = _new_compact(df)
+    os_, ns = sum(o for o, _ in old), sum(o for o, _ in new)
+    mk = lambda b: "✅" if b else "▫️"
+    lines = [
+        title,
+        "（收盤級日線 / FinMind；現有版＝量價剛發動篩選，逐字稿版＝趨勢交易進場）",
+        f"合計　現有 {os_}/6 ｜ 逐字稿 {ns}/6",
+        "",
+    ]
+    for i in range(6):
+        lines.append(f"{COND_MARK[i+1]} {_SIX_NAMES[i+1]}")
+        lines.append(f"   現有 {mk(old[i][0])} {old[i][1]}")
+        lines.append(f"   逐字 {mk(new[i][0])} {new[i][1]}")
+    lines.append("")
+    lines.append("逐字稿版更嚴（雙均線50/200、突破上軌、貼關鍵位、需先縮量回測）→ 同檔通常分數較低但訊號更純")
+    return "\n".join(lines)
 
 
 async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
