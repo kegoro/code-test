@@ -646,7 +646,7 @@ class SMCBot:
                 )
         extra = len(r.candidates) - self._SCAN_MAX_ROWS
         if extra > 0:
-            sort_by = "漲幅" if seven else "成交值"
+            sort_by = "成交額" if seven else "成交值"
             lines.append(f"…還有 {extra} 檔（依分數→{sort_by}排序取前 {self._SCAN_MAX_ROWS}）")
         lines.append("")
         if six or seven:
