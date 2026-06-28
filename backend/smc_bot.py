@@ -110,6 +110,10 @@ from backend.potential_scan import (
     explain_six_compare as run_six_compare,
     COND_MARK, DEFAULT_MIN_SCORE, STRONG_PCT, SIX_MIN_SCORE,
 )
+from backend.seven_scan import (
+    scan_seven as run_seven_scan,
+    explain_seven_compare as run_seven_compare,
+)
 from backend import diamond_score
 from backend import pe_valuation
 from backend import pullback_check
@@ -593,9 +597,14 @@ class SMCBot:
         now = datetime.now(ZoneInfo("Asia/Taipei"))
         await update.message.reply_text(self._format_potential(now, result))
 
-    def _format_potential(self, now, r, strong: bool = False, six: bool = False) -> str:
+    def _format_potential(self, now, r, strong: bool = False, six: bool = False, seven: bool = False) -> str:
         hhmm = now.strftime("%m-%d %H:%M")
-        if six:
+        if seven:
+            title = f"🦅 美股潛力股(逐字稿版) /seven  {hhmm}"
+            cond = "條件 ①量價配合 ②均線50/200多頭 ③突破上軌 ④貼38.2/61.8 ⑤RSI站上50企穩 ⑥柱縮→金叉"
+            pool = f"精選 {r.scanned} 檔大型股，成功深掃 {r.deep_analyzed} 檔"
+            lower = "目前無達標個股，可降門檻：/seven 2"
+        elif six:
             title = f"🔬 潛力股(逐字稿版) /six  {hhmm}"
             cond = "條件 ①量價配合 ②均線50/200多頭 ③突破上軌 ④貼38.2/61.8 ⑤RSI站上50企穩 ⑥柱縮→金叉"
             pool = f"掃 {r.scanned} 檔，深掃前 {r.deep_analyzed} 活躍股"
@@ -623,18 +632,19 @@ class SMCBot:
         for idx, c in enumerate(r.candidates[: self._SCAN_MAX_ROWS], 1):
             marks = "".join(COND_MARK[x] for x in c.conds)
             fib = f"回調{c.fib_retr*100:.0f}%" if c.fib_retr == c.fib_retr else "回調—"  # NaN check
-            pct = f" ▲{c.pct_change:.1f}%" if strong else ""
-            lines.append(
-                f"{idx}. {c.code} {c.name}  {c.score}分 {marks}{pct}"
-            )
+            pct = f" ▲{c.pct_change:+.1f}%" if (strong or seven) else ""
+            head_row = f"{idx}. {c.code} {c.score}分 {marks}{pct}" if seven \
+                else f"{idx}. {c.code} {c.name}  {c.score}分 {marks}{pct}"
+            lines.append(head_row)
             lines.append(
                 f"   收{c.close:,.2f} 量{c.vol_ratio:.1f}× RSI{c.rsi:.0f} {fib}"
             )
         extra = len(r.candidates) - self._SCAN_MAX_ROWS
         if extra > 0:
-            lines.append(f"…還有 {extra} 檔（依分數→成交值排序取前 {self._SCAN_MAX_ROWS}）")
+            sort_by = "漲幅" if seven else "成交值"
+            lines.append(f"…還有 {extra} 檔（依分數→{sort_by}排序取前 {self._SCAN_MAX_ROWS}）")
         lines.append("")
-        if six:
+        if six or seven:
             lines.append("逐字稿版=趨勢交易：②雙均線多頭為地基，⑥金叉為點火；分數較嚴=訊號較純")
         else:
             lines.append("中④=拉回找買點型；中⑥=已啟動追勢型。①②③齊到=量價剛發動")
@@ -672,6 +682,38 @@ class SMCBot:
         from zoneinfo import ZoneInfo
         now = datetime.now(ZoneInfo("Asia/Taipei"))
         await update.message.reply_text(self._format_potential(now, result, six=True))
+
+    # ── 美股逐字稿版 6 模塊 /seven ────────────────────────────────────────────
+
+    async def cmd_seven(self, update, context):
+        """/seven：無代碼→美股精選掃描；/seven NVDA→單檔新舊對照；/seven 2→掃描門檻2分。"""
+        toks = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
+        codes = [t.upper() for t in toks if any(ch.isalpha() for ch in t)]  # 含字母＝美股代號
+        nums = [t for t in toks if t.isdigit() and len(t) <= 1]
+
+        if codes:  # 單檔(可多檔)新舊對照
+            for code in codes[:5]:
+                try:
+                    await update.message.reply_text(await run_seven_compare(code))
+                except Exception as exc:
+                    await update.message.reply_text(f"{code}:{_safe_err(exc)}")
+            return
+
+        min_score = SIX_MIN_SCORE
+        if nums:
+            min_score = max(1, min(6, int(nums[0])))
+        await update.message.reply_text(
+            f"🦅 美股潛力股(逐字稿版)掃描中…（精選大型股逐檔日線計分，門檻 {min_score} 分，約 10-30 秒）"
+        )
+        try:
+            result = await run_seven_scan(min_score)
+        except Exception as exc:
+            await update.message.reply_text(_safe_err(exc))
+            return
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+        await update.message.reply_text(self._format_potential(now, result, seven=True))
 
     # ── 強勢股 6 條技術特性 /strong（當日漲幅≥5% + 計分）─────────────────────────
 
@@ -1539,6 +1581,7 @@ class SMCBot:
             BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
             BotCommand("strong", "🚀 強勢股(當日漲幅≥5%)再套6條技術特性計分"),
             BotCommand("six", "🔬 逐字稿版6模塊：/six 全市場掃描；/six 2330 單檔新舊對照"),
+            BotCommand("seven", "🦅 美股逐字稿版：/seven 精選掃描；/seven NVDA 單檔新舊對照"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),
@@ -1580,6 +1623,7 @@ class SMCBot:
         app.add_handler(CommandHandler("potential", self.cmd_potential_scan))
         app.add_handler(CommandHandler("strong", self.cmd_strong_scan))
         app.add_handler(CommandHandler("six", self.cmd_six_compare))
+        app.add_handler(CommandHandler("seven", self.cmd_seven))
         app.add_handler(CommandHandler("dia", self.cmd_diamond))
         app.add_handler(CommandHandler("pe", self.cmd_pe))
         app.add_handler(CommandHandler("pullback", self.cmd_pullback))

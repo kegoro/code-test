@@ -555,9 +555,8 @@ def _new_compact(df: pd.DataFrame) -> list[tuple[bool, str]]:
     return res
 
 
-async def explain_six_compare(code: str, name: str = "") -> str:
-    """/six：現有版 vs 逐字稿版 逐模塊對照。"""
-    df = await _fetch_ohlcv(code)
+def render_six_compare(df: pd.DataFrame, code: str, name: str = "", source: str = "FinMind") -> str:
+    """共用：把單檔 df 渲染成「現有版 vs 逐字稿版」逐模塊對照文字（台股/美股共用）。"""
     title = f"🔬 六大指標 新舊對照 {code} {name}".rstrip()
     if df.empty or len(df) < MIN_BARS:
         return f"{title}\n資料不足（需 ≥{MIN_BARS} 根日線），略過"
@@ -567,7 +566,7 @@ async def explain_six_compare(code: str, name: str = "") -> str:
     mk = lambda b: "✅" if b else "▫️"
     lines = [
         title,
-        "（收盤級日線 / FinMind；現有版＝量價剛發動篩選，逐字稿版＝趨勢交易進場）",
+        f"（收盤級日線 / {source}；現有版＝量價剛發動篩選，逐字稿版＝趨勢交易進場）",
         f"合計　現有 {os_}/6 ｜ 逐字稿 {ns}/6",
         "",
     ]
@@ -578,6 +577,12 @@ async def explain_six_compare(code: str, name: str = "") -> str:
     lines.append("")
     lines.append("逐字稿版更嚴（雙均線50/200、突破上軌、貼關鍵位、需先縮量回測）→ 同檔通常分數較低但訊號更純")
     return "\n".join(lines)
+
+
+async def explain_six_compare(code: str, name: str = "") -> str:
+    """/six：現有版 vs 逐字稿版 逐模塊對照（台股 FinMind）。"""
+    df = await _fetch_ohlcv(code)
+    return render_six_compare(df, code, name, source="FinMind")
 
 
 async def scan(min_score: int = DEFAULT_MIN_SCORE) -> PotentialResult:
