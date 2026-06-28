@@ -602,7 +602,7 @@ class SMCBot:
         if seven:
             title = f"🦅 美股潛力股(逐字稿版) /seven  {hhmm}"
             cond = "條件 ①量價配合 ②均線50/200多頭 ③突破上軌 ④貼38.2/61.8 ⑤RSI站上50企穩 ⑥柱縮→金叉"
-            pool = f"精選 {r.scanned} 檔大型股，成功深掃 {r.deep_analyzed} 檔"
+            pool = f"全市場 {r.scanned} 檔，深掃市值前 {r.deep_analyzed} 檔"
             lower = "目前無達標個股，可降門檻：/seven 2"
         elif six:
             title = f"🔬 潛力股(逐字稿版) /six  {hhmm}"
@@ -703,7 +703,7 @@ class SMCBot:
         if nums:
             min_score = max(1, min(6, int(nums[0])))
         await update.message.reply_text(
-            f"🦅 美股潛力股(逐字稿版)掃描中…（精選大型股逐檔日線計分，門檻 {min_score} 分，約 10-30 秒）"
+            f"🦅 美股潛力股(逐字稿版)掃描中…（全市場依市值取前段深掃 6 模塊，門檻 {min_score} 分，約 30-60 秒）"
         )
         try:
             result = await run_seven_scan(min_score)
@@ -1581,7 +1581,7 @@ class SMCBot:
             BotCommand("potential", "🔭 潛力股6條技術特性(上市+上櫃活躍股計分)"),
             BotCommand("strong", "🚀 強勢股(當日漲幅≥5%)再套6條技術特性計分"),
             BotCommand("six", "🔬 逐字稿版6模塊：/six 全市場掃描；/six 2330 單檔新舊對照"),
-            BotCommand("seven", "🦅 美股逐字稿版：/seven 精選掃描；/seven NVDA 單檔新舊對照"),
+            BotCommand("seven", "🦅 美股逐字稿版：/seven 全市場掃描；/seven NVDA 單檔新舊對照"),
             BotCommand("dia", "💎 鑽豹高分記錄（/dia 2330 評個股）"),
             BotCommand("fin", "🗡️ 鑽豹四刀分析（/fin 2330 完整體檢）"),
             BotCommand("blade1", "🗡️ 第一刀 watcher（掃觀察名單進場訊號）"),

@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """美股版逐字稿(趨勢交易)6 模塊掃描 — /seven。
 
-台股 /six 用 FinMind；美股無等價全市場 API，故以「精選流動性大型股清單」當掃描池
-（偏 AI/半導體 + 科技權值），資料源複用 diamond_blade3._fetch_us_daily(yfinance 日K)。
+全市場架構（對齊台股 /six）：
+  NASDAQ 官方 screener 一次抓全美股(NASDAQ+NYSE+AMEX)報價/市值 → 依市值排序
+  → 深掃前 N 大型/中大型股(yfinance 日K)。
+（美股無台股 FinMind 那種全市場日K API，逐檔抓上千檔會慢且易斷，故先用市值濾出
+  流動性前段再深掃——與台股「掃全市場、深掃前 150 活躍股」同邏輯。）
 評分/對照邏輯完全複用 potential_scan 的逐字稿版（_new_score_df / render_six_compare）。
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 
+import httpx
 import pandas as pd
 
 from backend.diamond_blade3 import _fetch_us_daily
@@ -18,28 +23,71 @@ from backend.potential_scan import (
     SIX_MIN_SCORE, MIN_BARS,
 )
 
-# 精選美股掃描池（流動性大型股；龍頭為主，偏 AI/半導體/科技權值）
-US_UNIVERSE: list[str] = [
-    # megacap
+logger = logging.getLogger("seven_scan")
+
+_SCREENER_URL = "https://api.nasdaq.com/api/screener/stocks"
+_SCREENER_HEADERS = {
+    "User-Agent": "Mozilla/5.0", "Accept": "application/json",
+    "Accept-Language": "en-US",
+}
+_EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
+
+US_TOP_N = 400             # 依市值排序後深掃前 N（涵蓋大型+中大型）
+_FETCH_DAYS = 400          # 需 ≥225 交易日算 MA200，抓 400 日曆日
+_MAX_CONCURRENCY = 10
+US_SOURCE = "yfinance"
+
+# screener 掛掉時的後備清單（精選大型股，偏 AI/半導體）
+US_FALLBACK = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AVGO",
-    # 半導體 / 設備
-    "AMD", "INTC", "QCOM", "MU", "TXN", "ADI", "MRVL", "NXPI", "ON", "MCHP",
-    "TSM", "ASML", "AMAT", "LRCX", "KLAC", "ARM", "SMCI", "WDC", "STX",
-    "GFS", "UMC", "TER", "ENTG", "COHR", "LITE", "AAOI",
-    # 軟體 / AI / EDA / 網通
-    "ORCL", "CRM", "ADBE", "NOW", "PLTR", "SNOW", "PANW", "CRWD", "NET",
-    "DDOG", "MDB", "ANET", "CSCO", "IBM", "SNPS", "CDNS",
-    # 網路 / 媒體 / 消費
-    "NFLX", "UBER", "ABNB", "SHOP", "SPOT", "COST",
-    # 資料中心電源 / 散熱 / 電網
-    "VRT", "ETN", "PWR", "GEV",
-    # 金融 / 醫療權值
-    "JPM", "V", "MA", "LLY", "UNH",
+    "AMD", "INTC", "QCOM", "MU", "TXN", "ADI", "MRVL", "TSM", "ASML",
+    "AMAT", "LRCX", "KLAC", "ARM", "SMCI", "ORCL", "CRM", "ADBE", "NOW",
+    "PLTR", "PANW", "CRWD", "ANET", "CSCO", "SNPS", "CDNS", "NFLX",
+    "UBER", "COST", "VRT", "JPM", "V", "MA", "LLY", "UNH",
 ]
 
-_FETCH_DAYS = 400          # 需 ≥225 交易日算 MA200，抓 400 日曆日
-_MAX_CONCURRENCY = 8
-US_SOURCE = "yfinance"
+
+def _money(s: str | None) -> float:
+    s = (s or "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _pct(s: str | None) -> float:
+    s = (s or "").replace("%", "").replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+async def _fetch_us_universe(top_n: int) -> tuple[list[tuple[str, str, float]], int]:
+    """NASDAQ screener 抓全市場 → 依市值排序取前 top_n。
+
+    回 ([(symbol, name, pct), ...], 全市場總檔數)。失敗則回後備清單。
+    """
+    rows: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=60, headers=_SCREENER_HEADERS) as cli:
+            for exch in _EXCHANGES:
+                resp = await cli.get(_SCREENER_URL, params={
+                    "tableonly": "true", "limit": "10000", "offset": "0",
+                    "exchange": exch,
+                })
+                resp.raise_for_status()
+                rows += resp.json()["data"]["table"]["rows"]
+    except Exception as exc:
+        logger.warning("NASDAQ screener failed (%s) → 用後備清單", exc)
+        fb = [(s, "", 0.0) for s in US_FALLBACK]
+        return fb, len(fb)
+
+    # 只留普通股：純字母代號 + 有市值
+    clean = [r for r in rows if r["symbol"].isalpha() and _money(r["marketCap"]) > 0]
+    clean.sort(key=lambda r: _money(r["marketCap"]), reverse=True)
+    picked = [(r["symbol"], r["name"], _pct(r.get("pctchange"))) for r in clean[:top_n]]
+    return picked, len(clean)
 
 
 def _to_df(rows: list[dict]) -> pd.DataFrame:
@@ -56,33 +104,31 @@ async def _fetch_us_df(code: str) -> pd.DataFrame:
     return _to_df(rows)
 
 
-async def scan_seven(min_score: int = SIX_MIN_SCORE) -> PotentialResult:
-    """美股逐字稿版掃描：精選清單逐檔套趨勢交易 6 模塊計分。"""
+async def scan_seven(min_score: int = SIX_MIN_SCORE, top_n: int = US_TOP_N) -> PotentialResult:
+    """美股全市場掃描：市值前 top_n 逐檔套趨勢交易 6 模塊計分。"""
+    universe, total = await _fetch_us_universe(top_n)
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)
 
-    async def _one(code: str) -> PotentialCandidate | None:
+    async def _one(code: str, name: str, pct: float) -> PotentialCandidate | None:
         async with sem:
             df = await _fetch_us_df(code)
         if df.empty or len(df) < MIN_BARS:
             return None
         score, conds, rsi, fib, vr = _new_score_df(df)
-        close = float(df["close"].iloc[-1])
-        prev = float(df["close"].iloc[-2]) if len(df) >= 2 else close
-        pct = (close / prev - 1) * 100 if prev > 0 else 0.0
         return PotentialCandidate(
-            code=code, name="", trade_value=0.0, close=close,
+            code=code, name=name, trade_value=0.0, close=float(df["close"].iloc[-1]),
             score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
             pct_change=pct,
         )
 
-    results = await asyncio.gather(*[_one(c) for c in US_UNIVERSE])
+    results = await asyncio.gather(*[_one(c, n, p) for c, n, p in universe])
     scored = [r for r in results if r is not None]
     survivors = sorted(
         [r for r in scored if r.score >= min_score],
         key=lambda r: (r.score, r.pct_change), reverse=True,
     )
     return PotentialResult(
-        candidates=tuple(survivors), scanned=len(US_UNIVERSE),
+        candidates=tuple(survivors), scanned=total,
         deep_analyzed=len(scored), min_score=min_score,
     )
 
