@@ -81,6 +81,7 @@ class PotentialCandidate:
     fib_retr: float          # 回調比例（NaN=無有效波段）
     vol_ratio: float         # 今日量 / 20日均量
     pct_change: float = 0.0  # 今日漲幅%（強勢股用；潛力股不計）
+    market_cap: float = 0.0  # 市值（美股 /seven 用；台股留 0）
 
 
 @dataclass(frozen=True)

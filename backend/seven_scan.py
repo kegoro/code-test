@@ -32,9 +32,10 @@ _SCREENER_HEADERS = {
 }
 _EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 
-US_TOP_N = 400             # 依市值排序後深掃前 N（涵蓋大型+中大型）
+US_TOP_N = 700             # 依市值排序後深掃前 N（涵蓋大型+中大型）
 _FETCH_DAYS = 400          # 需 ≥225 交易日算 MA200，抓 400 日曆日
 _MAX_CONCURRENCY = 10
+_DOLLAR_VOL_WIN = 20       # 成交額用 20 日均量×收盤估算
 US_SOURCE = "yfinance"
 
 # screener 掛掉時的後備清單（精選大型股，偏 AI/半導體）
@@ -63,10 +64,10 @@ def _pct(s: str | None) -> float:
         return 0.0
 
 
-async def _fetch_us_universe(top_n: int) -> tuple[list[tuple[str, str, float]], int]:
+async def _fetch_us_universe(top_n: int) -> tuple[list[tuple[str, str, float, float]], int]:
     """NASDAQ screener 抓全市場 → 依市值排序取前 top_n。
 
-    回 ([(symbol, name, pct), ...], 全市場總檔數)。失敗則回後備清單。
+    回 ([(symbol, name, pct, market_cap), ...], 全市場總檔數)。失敗則回後備清單。
     """
     rows: list[dict] = []
     try:
@@ -80,13 +81,14 @@ async def _fetch_us_universe(top_n: int) -> tuple[list[tuple[str, str, float]], 
                 rows += resp.json()["data"]["table"]["rows"]
     except Exception as exc:
         logger.warning("NASDAQ screener failed (%s) → 用後備清單", exc)
-        fb = [(s, "", 0.0) for s in US_FALLBACK]
+        fb = [(s, "", 0.0, 0.0) for s in US_FALLBACK]
         return fb, len(fb)
 
     # 只留普通股：純字母代號 + 有市值
     clean = [r for r in rows if r["symbol"].isalpha() and _money(r["marketCap"]) > 0]
     clean.sort(key=lambda r: _money(r["marketCap"]), reverse=True)
-    picked = [(r["symbol"], r["name"], _pct(r.get("pctchange"))) for r in clean[:top_n]]
+    picked = [(r["symbol"], r["name"], _pct(r.get("pctchange")), _money(r["marketCap"]))
+              for r in clean[:top_n]]
     return picked, len(clean)
 
 
@@ -104,28 +106,41 @@ async def _fetch_us_df(code: str) -> pd.DataFrame:
     return _to_df(rows)
 
 
-async def scan_seven(min_score: int = SIX_MIN_SCORE, top_n: int = US_TOP_N) -> PotentialResult:
-    """美股全市場掃描：市值前 top_n 逐檔套趨勢交易 6 模塊計分。"""
+async def scan_seven(
+    min_score: int = SIX_MIN_SCORE,
+    top_n: int = US_TOP_N,
+    sort_by: str = "value",
+) -> PotentialResult:
+    """美股全市場掃描：市值前 top_n 逐檔套趨勢交易 6 模塊計分。
+
+    sort_by='value'→達標股依「估算成交額(20日均量×收盤)」排序(抓當下熱門)；
+    sort_by='mcap'→依市值排序(抓權值龍頭)。深掃母體一律先用市值取前 top_n。
+    """
     universe, total = await _fetch_us_universe(top_n)
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)
 
-    async def _one(code: str, name: str, pct: float) -> PotentialCandidate | None:
+    async def _one(code: str, name: str, pct: float, mcap: float) -> PotentialCandidate | None:
         async with sem:
             df = await _fetch_us_df(code)
         if df.empty or len(df) < MIN_BARS:
             return None
         score, conds, rsi, fib, vr = _new_score_df(df)
+        close = float(df["close"].iloc[-1])
+        avg_vol = float(df["volume"].tail(_DOLLAR_VOL_WIN).mean())
+        dollar_vol = close * avg_vol                 # 估算日均成交額（美元）
         return PotentialCandidate(
-            code=code, name=name, trade_value=0.0, close=float(df["close"].iloc[-1]),
+            code=code, name=name, trade_value=dollar_vol, close=close,
             score=score, conds=tuple(conds), rsi=rsi, fib_retr=fib, vol_ratio=vr,
-            pct_change=pct,
+            pct_change=pct, market_cap=mcap,
         )
 
-    results = await asyncio.gather(*[_one(c, n, p) for c, n, p in universe])
+    results = await asyncio.gather(*[_one(c, n, p, m) for c, n, p, m in universe])
     scored = [r for r in results if r is not None]
+    rank_key = (lambda r: (r.score, r.market_cap)) if sort_by == "mcap" \
+        else (lambda r: (r.score, r.trade_value))
     survivors = sorted(
         [r for r in scored if r.score >= min_score],
-        key=lambda r: (r.score, r.pct_change), reverse=True,
+        key=rank_key, reverse=True,
     )
     return PotentialResult(
         candidates=tuple(survivors), scanned=total,

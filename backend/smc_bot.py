@@ -636,9 +636,14 @@ class SMCBot:
             head_row = f"{idx}. {c.code} {c.score}分 {marks}{pct}" if seven \
                 else f"{idx}. {c.code} {c.name}  {c.score}分 {marks}{pct}"
             lines.append(head_row)
-            lines.append(
-                f"   收{c.close:,.2f} 量{c.vol_ratio:.1f}× RSI{c.rsi:.0f} {fib}"
-            )
+            if seven:
+                lines.append(
+                    f"   收{c.close:,.2f} 市值{c.market_cap/1e9:.0f}B 成交額{c.trade_value/1e6:.0f}M RSI{c.rsi:.0f} {fib}"
+                )
+            else:
+                lines.append(
+                    f"   收{c.close:,.2f} 量{c.vol_ratio:.1f}× RSI{c.rsi:.0f} {fib}"
+                )
         extra = len(r.candidates) - self._SCAN_MAX_ROWS
         if extra > 0:
             sort_by = "漲幅" if seven else "成交值"
@@ -688,8 +693,17 @@ class SMCBot:
     async def cmd_seven(self, update, context):
         """/seven：無代碼→美股精選掃描；/seven NVDA→單檔新舊對照；/seven 2→掃描門檻2分。"""
         toks = [c for arg in (context.args or []) for c in re.split(r"[,\s]+", arg) if c]
-        codes = [t.upper() for t in toks if any(ch.isalpha() for ch in t)]  # 含字母＝美股代號
-        nums = [t for t in toks if t.isdigit() and len(t) <= 1]
+        sort_kw = {"mcap": "mcap", "cap": "mcap", "市值": "mcap",
+                   "value": "value", "vol": "value", "成交額": "value"}
+        sort_by = "value"
+        rest = []
+        for t in toks:
+            if t.lower() in sort_kw:
+                sort_by = sort_kw[t.lower()]
+            else:
+                rest.append(t)
+        codes = [t.upper() for t in rest if any(ch.isalpha() for ch in t)]  # 含字母＝美股代號
+        nums = [t for t in rest if t.isdigit() and len(t) <= 1]
 
         if codes:  # 單檔(可多檔)新舊對照
             for code in codes[:5]:
@@ -702,11 +716,12 @@ class SMCBot:
         min_score = SIX_MIN_SCORE
         if nums:
             min_score = max(1, min(6, int(nums[0])))
+        sort_label = "市值" if sort_by == "mcap" else "成交額"
         await update.message.reply_text(
-            f"🦅 美股潛力股(逐字稿版)掃描中…（全市場依市值取前段深掃 6 模塊，門檻 {min_score} 分，約 30-60 秒）"
+            f"🦅 美股潛力股(逐字稿版)掃描中…（全市場市值前段深掃 6 模塊，達標依{sort_label}排序，門檻 {min_score} 分，約 30-60 秒）"
         )
         try:
-            result = await run_seven_scan(min_score)
+            result = await run_seven_scan(min_score, sort_by=sort_by)
         except Exception as exc:
             await update.message.reply_text(_safe_err(exc))
             return
