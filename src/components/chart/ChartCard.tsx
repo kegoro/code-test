@@ -11,6 +11,7 @@ import { cn } from "@/lib/cn";
 import { findTicker } from "@/data/watchlist-symbols";
 import type { Candle } from "@/data/types";
 import { LiveTickStrip } from "@/components/dashboard/LiveTickStrip";
+import type { SmcStructure, SmcTradeIdea } from "@/types/smc";
 
 const MA_LEGEND = [
   { period: 5,   color: "#fbbf24", label: "MA5" },
@@ -27,9 +28,20 @@ interface Props {
   state: FetchState;
   candles: readonly Candle[];
   refetch: () => void;
+  structure?: SmcStructure | null;
+  onTradeIdeaClick?: (idea: SmcTradeIdea) => void;
+  onZoneClick?: (zone: { kind: "demand" | "supply"; top: number; bottom: number }) => void;
 }
 
-export function ChartCard({ symbol, state, candles, refetch }: Props) {
+export function ChartCard({
+  symbol,
+  state,
+  candles,
+  refetch,
+  structure,
+  onTradeIdeaClick,
+  onZoneClick,
+}: Props) {
   const meta = useMemo(() => findTicker(symbol), [symbol]);
 
   const last = candles[candles.length - 1];
@@ -128,7 +140,12 @@ export function ChartCard({ symbol, state, candles, refetch }: Props) {
           </div>
         )}
         {state.status === "ready" && candles.length > 0 && (
-          <TradingChart candles={candles} />
+          <TradingChart
+            candles={candles}
+            structure={structure}
+            onTradeIdeaClick={onTradeIdeaClick}
+            onZoneClick={onZoneClick}
+          />
         )}
       </div>
     </section>

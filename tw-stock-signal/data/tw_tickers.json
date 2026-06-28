@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-22",
+  "date": "2026-06-25",
   "tickers": [
     {
       "symbol": "1101",
@@ -319,6 +319,11 @@
     {
       "symbol": "1434",
       "name": "福懋",
+      "market": "twse"
+    },
+    {
+      "symbol": "1435",
+      "name": "中福",
       "market": "twse"
     },
     {
@@ -1559,11 +1564,6 @@
     {
       "symbol": "2379",
       "name": "瑞昱",
-      "market": "twse"
-    },
-    {
-      "symbol": "2380",
-      "name": "虹光",
       "market": "twse"
     },
     {
@@ -3432,6 +3432,11 @@
       "market": "twse"
     },
     {
+      "symbol": "4582",
+      "name": "聚恆-創",
+      "market": "twse"
+    },
+    {
       "symbol": "4583",
       "name": "台灣精銳",
       "market": "twse"
@@ -4537,11 +4542,6 @@
       "market": "twse"
     },
     {
-      "symbol": "6806",
-      "name": "森崴能源",
-      "market": "twse"
-    },
-    {
       "symbol": "6807",
       "name": "峰源-KY",
       "market": "twse"
@@ -4899,6 +4899,11 @@
     {
       "symbol": "7823",
       "name": "奧義賽博-KY創",
+      "market": "twse"
+    },
+    {
+      "symbol": "7827",
+      "name": "漢康-KY創",
       "market": "twse"
     },
     {
@@ -5462,11 +5467,6 @@
       "market": "otc"
     },
     {
-      "symbol": "1591",
-      "name": "駿吉-KY",
-      "market": "otc"
-    },
-    {
       "symbol": "1593",
       "name": "祺驊",
       "market": "otc"
@@ -5489,6 +5489,11 @@
     {
       "symbol": "1777",
       "name": "生泰",
+      "market": "otc"
+    },
+    {
+      "symbol": "1780",
+      "name": "立弘",
       "market": "otc"
     },
     {
@@ -5842,11 +5847,6 @@
       "market": "otc"
     },
     {
-      "symbol": "3152",
-      "name": "璟德",
-      "market": "otc"
-    },
-    {
       "symbol": "3158",
       "name": "嘉實",
       "market": "otc"
@@ -6179,11 +6179,6 @@
     {
       "symbol": "3402",
       "name": "漢科",
-      "market": "otc"
-    },
-    {
-      "symbol": "3426",
-      "name": "台興",
       "market": "otc"
     },
     {
@@ -9007,6 +9002,11 @@
       "market": "otc"
     },
     {
+      "symbol": "6945",
+      "name": "圓祥生技",
+      "market": "otc"
+    },
+    {
       "symbol": "6953",
       "name": "家碩",
       "market": "otc"
@@ -9034,6 +9034,11 @@
     {
       "symbol": "6982",
       "name": "大井泵浦",
+      "market": "otc"
+    },
+    {
+      "symbol": "6983",
+      "name": "華洋精機",
       "market": "otc"
     },
     {
@@ -9227,6 +9232,11 @@
       "market": "otc"
     },
     {
+      "symbol": "7819",
+      "name": "精誠金融",
+      "market": "otc"
+    },
+    {
       "symbol": "7820",
       "name": "立盈",
       "market": "otc"
@@ -9234,6 +9244,11 @@
     {
       "symbol": "7828",
       "name": "創新服務",
+      "market": "otc"
+    },
+    {
+      "symbol": "7839",
+      "name": "達人網",
       "market": "otc"
     },
     {

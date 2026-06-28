@@ -225,10 +225,19 @@
       "WebFetch(domain:openapi.twse.com.tw)",
       "Bash(\"/c/Users/sfudally/AppData/Local/Programs/Python/Python313/python.exe\" -m backend.shortage_radar --twse)",
       "Bash(\"/c/Users/sfudally/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import ast; ast.parse\\(open\\('backend/smc_bot.py',encoding='utf-8'\\).read\\(\\)\\); print\\('smc_bot OK'\\)\")",
-      "PowerShell(schtasks /create /tn \"SMCBot\" /tr '\"C:\\\\Users\\\\sfudally\\\\Desktop\\\\code test\\\\start_smc_bot.bat\"' /sc ONLOGON /rl LIMITED /f 2>&1)"
+      "PowerShell(schtasks /create /tn \"SMCBot\" /tr '\"C:\\\\Users\\\\sfudally\\\\Desktop\\\\code test\\\\start_smc_bot.bat\"' /sc ONLOGON /rl LIMITED /f 2>&1)",
+      "Bash(iconv -f big5 -t utf-8//TRANSLIT /tmp/ls_is.html)",
+      "Bash(grep -oE '營業\\(收入|毛利|利益\\)[^<]{0,40}')",
+      "Bash(grep -aoE '\\(光聖|6442|查詢|無資料|錯誤|營業|本資料\\)[^<]{0,30}' /tmp/ls_is.html)",
+      "Bash(/c/Users/sfudally/AppData/Local/Programs/Python/Python313/python.exe _mops_probe.py)",
+      "Bash(/c/Users/sfudally/AppData/Local/Programs/Python/Python313/python.exe -m backend.mops_fundamentals 6442)",
+      "Bash(PYTHONIOENCODING=utf-8 python -m backend.diamond_full IREN)"
     ]
   },
   "disabledMcpjsonServers": [
     "hermes"
+  ],
+  "enabledMcpjsonServers": [
+    "playwright"
   ]
 }

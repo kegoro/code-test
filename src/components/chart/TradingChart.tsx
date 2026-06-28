@@ -4,9 +4,14 @@ import { useEffect, useRef } from "react";
 import { dispose, init, type Chart, type KLineData } from "klinecharts";
 import { buildKLineTheme, MA_PERIODS } from "@/lib/chart-theme";
 import type { Candle } from "@/data/types";
+import type { SmcStructure, SmcTradeIdea } from "@/types/smc";
+import { applySmcStructure } from "./smcOverlays";
 
 interface Props {
   candles: readonly Candle[];
+  structure?: SmcStructure | null;
+  onTradeIdeaClick?: (idea: SmcTradeIdea) => void;
+  onZoneClick?: (zone: { kind: "demand" | "supply"; top: number; bottom: number }) => void;
 }
 
 function toKLineData(candles: readonly Candle[]): KLineData[] {
@@ -20,9 +25,14 @@ function toKLineData(candles: readonly Candle[]): KLineData[] {
   }));
 }
 
-export function TradingChart({ candles }: Props) {
+export function TradingChart({ candles, structure, onTradeIdeaClick, onZoneClick }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
+  // Stash latest callbacks so applySmcStructure always sees fresh closures.
+  const tradeIdeaCb = useRef<typeof onTradeIdeaClick>(onTradeIdeaClick);
+  const zoneCb = useRef<typeof onZoneClick>(onZoneClick);
+  tradeIdeaCb.current = onTradeIdeaClick;
+  zoneCb.current = onZoneClick;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -60,6 +70,17 @@ export function TradingChart({ candles }: Props) {
     if (!chart) return;
     chart.applyNewData(toKLineData(candles));
   }, [candles]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (candles.length === 0) return;
+    applySmcStructure(chart, structure ?? null, {
+      onTradeIdeaClick: (idea) => tradeIdeaCb.current?.(idea),
+      onDemandClick: (b) => zoneCb.current?.({ kind: "demand", ...b }),
+      onSupplyClick: (b) => zoneCb.current?.({ kind: "supply", ...b }),
+    });
+  }, [structure, candles.length]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

@@ -18,6 +18,7 @@ Non-trading days: all jobs check is_trading_day() and exit early.
 """
 import asyncio
 import json
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from loguru import logger
@@ -138,15 +139,17 @@ async def _fetch_one(stock: dict, sem: asyncio.Semaphore) -> str | None:
         return symbol
 
 
-async def _analyze_one(stock: dict, sem: asyncio.Semaphore) -> object | None:
-    """Run strategy on one symbol. Returns Signal or None."""
+async def _analyze_one(stock: dict, sem: asyncio.Semaphore, market_idx: pd.DataFrame) -> object | None:
+    """Run strategy on one symbol. Returns Signal or None.
+
+    market_idx is read once per batch by the caller (大盤指數 1700 檔共用) to avoid N+1.
+    """
     async with sem:
         symbol, name = stock["symbol"], stock["name"]
         prices        = read_prices(symbol)
         institutional = read_institutional(symbol)
         margin        = read_margin(symbol)
         shareholding  = read_shareholding(symbol)
-        market_idx    = read_market_index(days=10)
 
         trend = analyze_trend(prices)
         if not trend.has_enough_data:
@@ -250,8 +253,9 @@ async def _do_analyze() -> None:
         return
 
     logger.info(f"[analyze] Computing signals for {len(stocks)} symbols")
-    sem    = asyncio.Semaphore(settings.universe_concurrency * 2)
-    tasks  = [_analyze_one(stock, sem) for stock in stocks]
+    sem        = asyncio.Semaphore(settings.universe_concurrency * 2)
+    market_idx = read_market_index(days=10)
+    tasks      = [_analyze_one(stock, sem, market_idx) for stock in stocks]
     signals, completed = [], 0
 
     for coro in asyncio.as_completed(tasks):

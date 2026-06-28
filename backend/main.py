@@ -17,8 +17,10 @@ import asyncio
 import json
 import logging
 import os
+import time
 import traceback
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Final
 
 import math
@@ -40,6 +42,9 @@ from backend.mock_tick_generator import DEFAULT_QUEUE_MAXSIZE, MockTickGenerator
 from backend.scanner_scheduler import ScannerEngine
 from backend.backtest_report import BacktestReport
 from backend.backtest_runner import DEFAULT_CACHE_DIR, run_backtest
+from backend import sim_book
+from backend.smc_analyst.context import gather_context
+from backend.smc_analyst.pipeline import analyse as smc_analyse
 
 logger = logging.getLogger("footprint-backend")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -292,6 +297,47 @@ async def scanner_setups_symbol(symbol: str) -> dict[str, object]:
     return {"signals": state.scanner.active_signals(symbol=symbol)}
 
 
+@app.post("/api/scanner/debug/emit")
+async def scanner_debug_emit(
+    symbol: str = Query(default="2330"),
+    setup: str = Query(default="A1"),
+    direction: str = Query(default="LONG"),
+    grade: str = Query(default="A"),
+    entry: float = Query(default=1085.0),
+    stop: float = Query(default=1078.0),
+    target: float = Query(default=1102.0),
+) -> dict[str, object]:
+    """Inject a synthetic ACTIVE signal into the SSE stream (dev / smoke test only)."""
+    if state.scanner is None:
+        raise HTTPException(status_code=503, detail="scanner not running")
+    now = datetime.now().isoformat()
+    dedup = f"debug:{symbol}:{setup}:{direction}:{int(time.time())}"
+    payload = {
+        "type": "signal",
+        "data": {
+            "signal_id": dedup,
+            "dedup_key": dedup,
+            "symbol": symbol,
+            "setup": setup,
+            "direction": direction,
+            "grade": grade,
+            "status": "ACTIVE",
+            "score_passed": 5,
+            "score_total": 5,
+            "entry_price": entry,
+            "stop_price": stop,
+            "target_price": target,
+            "conditions": [{"code": "DBG", "label": "debug inject", "passed": True}],
+            "cancel_conditions": [],
+            "triggered_at": now,
+            "bar_timestamp": now,
+            "timeframe": "5m",
+        },
+    }
+    await state.scanner._broadcast(payload)  # noqa: SLF001
+    return {"ok": True, "broadcast": dedup}
+
+
 @app.get("/api/scanner/stream")
 async def scanner_stream() -> StreamingResponse:
     if state.scanner is None:
@@ -501,3 +547,207 @@ async def backtest_result() -> dict[str, object]:
     if state.backtest_status == "error":
         raise HTTPException(status_code=500, detail=state.backtest_error or "backtest error")
     return {"status": "ready", "report": state.backtest_report_dict}
+
+
+# ============================================================
+# Sim book endpoints (Phase 1 — paper trading UI)
+# ============================================================
+
+
+class SimOpenRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=10)
+    direction: str = Field(pattern="^(long|short)$")
+    entry: float = Field(gt=0)
+    stop: float = Field(gt=0)
+    target: float = Field(gt=0)
+    size: int = Field(default=1, ge=1, le=1000)
+    note: str = Field(default="", max_length=200)
+
+
+class SimCloseRequest(BaseModel):
+    exit_price: float = Field(gt=0)
+    reason: str = Field(default="manual_close", pattern="^(target_hit|stop_hit|manual_close)$")
+
+
+def _position_to_dict(p: sim_book.SimPosition) -> dict[str, object]:
+    return {
+        "id": p.id,
+        "symbol": p.symbol,
+        "direction": p.direction,
+        "entry": p.entry,
+        "stop": p.stop,
+        "target": p.target,
+        "size": p.size,
+        "opened_at": p.opened_at,
+        "status": p.status,
+        "exit_price": p.exit_price,
+        "exit_reason": p.exit_reason,
+        "closed_at": p.closed_at,
+        "note": p.note,
+        "planned_risk_twd": p.planned_risk_twd,
+        "planned_reward_twd": p.planned_reward_twd,
+        "risk_reward": p.risk_reward,
+        "pnl_twd": p.pnl_twd,
+        "r_multiple": p.r_multiple,
+    }
+
+
+@app.post("/api/sim/open")
+async def sim_open(req: SimOpenRequest) -> dict[str, object]:
+    try:
+        pos = sim_book.open_position(
+            symbol=req.symbol,
+            direction=req.direction,  # type: ignore[arg-type]
+            entry=req.entry,
+            stop=req.stop,
+            target=req.target,
+            size=req.size,
+            note=req.note,
+        )
+    except sim_book.SimOpenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"position": _position_to_dict(pos)}
+
+
+@app.post("/api/sim/close/{position_id}")
+async def sim_close(position_id: str, req: SimCloseRequest) -> dict[str, object]:
+    try:
+        pos = sim_book.close_position(
+            position_id,
+            exit_price=req.exit_price,
+            reason=req.reason,  # type: ignore[arg-type]
+        )
+    except sim_book.SimOpenError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"position": _position_to_dict(pos)}
+
+
+@app.get("/api/sim/status")
+async def sim_status() -> dict[str, object]:
+    active = sim_book.list_active()
+    today = sim_book.list_today()
+    return {
+        "active": [_position_to_dict(p) for p in active],
+        "today": [_position_to_dict(p) for p in today],
+        "limits": {
+            "daily_open_limit": sim_book.DAILY_OPEN_LIMIT,
+            "single_risk_limit_twd": sim_book.SINGLE_RISK_LIMIT_TWD,
+            "min_risk_reward": sim_book.MIN_RISK_REWARD,
+        },
+    }
+
+
+# ============================================================
+# SMC structure endpoint (Phase 2 — chart overlays)
+# ============================================================
+
+
+_SYMBOL_PATTERN_SMC = __import__("re").compile(r"^[A-Za-z0-9]{1,10}$")
+
+
+def _ob_to_dict(ob: dict, timeframe: str) -> dict[str, object]:
+    formed_at = ob.get("formed_at")
+    formed_ts = 0
+    if formed_at is not None:
+        try:
+            formed_ts = int(formed_at.value // 1_000_000_000)
+        except AttributeError:
+            formed_ts = 0
+    return {
+        "top": float(ob["top"]),
+        "bottom": float(ob["bottom"]),
+        "formed_ts": formed_ts,
+        "timeframe": timeframe,
+    }
+
+
+def _fvg_to_dict(fvg: dict, timeframe: str) -> dict[str, object]:
+    formed_at = fvg.get("formed_at") or fvg.get("created_at")
+    formed_ts = 0
+    if formed_at is not None:
+        try:
+            formed_ts = int(formed_at.value // 1_000_000_000)
+        except AttributeError:
+            formed_ts = 0
+    return {
+        "bias": str(fvg.get("bias", "")),
+        "top": float(fvg["top"]),
+        "bottom": float(fvg["bottom"]),
+        "formed_ts": formed_ts,
+        "timeframe": timeframe,
+    }
+
+
+@app.get("/api/smc/structure/{symbol}")
+async def smc_structure(symbol: str) -> dict[str, object]:
+    if not _SYMBOL_PATTERN_SMC.match(symbol):
+        raise HTTPException(status_code=400, detail="invalid symbol")
+
+    try:
+        ctx = await gather_context(symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("smc_structure %s: context failed: %s", symbol, exc)
+        return {
+            "symbol": symbol,
+            "session_phase": "closed",
+            "htf_bias": "ranging",
+            "ltf": {"timeframe": "1m", "last_close": None, "atr": 0.0, "last_bar_ts": 0},
+            "demand_blocks": [],
+            "supply_blocks": [],
+            "fvgs": [],
+            "trade_idea": None,
+            "data_status": "unavailable",
+            "data_error": str(exc)[:200],
+        }
+
+    demand_blocks: list[dict[str, object]] = []
+    supply_blocks: list[dict[str, object]] = []
+    for ob in ctx.active_obs:
+        bias = ob.get("bias")
+        record = _ob_to_dict(ob, ctx.ltf.timeframe)
+        if bias == "bullish":
+            demand_blocks.append(record)
+        elif bias == "bearish":
+            supply_blocks.append(record)
+
+    fvgs = [_fvg_to_dict(f, ctx.ltf.timeframe) for f in ctx.active_fvgs]
+
+    trade_idea_dict: dict[str, object] | None = None
+    try:
+        idea = await smc_analyse(symbol, allow_closed_session=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("smc_analyse %s failed: %s", symbol, exc)
+        idea = None
+    if idea is not None:
+        m = idea.match
+        trade_idea_dict = {
+            "setup_name": m.setup_name,
+            "direction": m.direction,
+            "entry": m.entry,
+            "stop": m.stop,
+            "target": m.target,
+            "risk_reward": m.risk_reward,
+            "confidence": m.confidence,
+            "score": m.score,
+            "htf_aligned": m.htf_aligned,
+            "is_high_conviction": m.is_high_conviction,
+            "reasoning": list(m.reasoning),
+        }
+
+    return {
+        "symbol": symbol,
+        "session_phase": ctx.session_phase,
+        "htf_bias": ctx.htf_bias,
+        "ltf": {
+            "timeframe": ctx.ltf.timeframe,
+            "last_close": ctx.last_close if not (ctx.last_close != ctx.last_close) else None,  # NaN guard
+            "atr": ctx.atr_ltf,
+            "last_bar_ts": ctx.ltf.last_bar_ts,
+        },
+        "demand_blocks": demand_blocks,
+        "supply_blocks": supply_blocks,
+        "fvgs": fvgs,
+        "trade_idea": trade_idea_dict,
+        "data_status": "ok",
+        "data_error": None,
+    }

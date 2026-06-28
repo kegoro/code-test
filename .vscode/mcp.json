@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "hermes": {
+      "type": "stdio",
+      "command": "hermes",
+      "args": []
+    }
+  }
+}

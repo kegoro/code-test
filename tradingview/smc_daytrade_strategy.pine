@@ -1,0 +1,56 @@
+// ============================================================
+//  SMC 順勢日內「回測版」strategy() — long-only
+//  搭配指標版 smc_daytrade.pine。這支用來在 TradingView 的
+//  「策略測試器 (Strategy Tester)」跑數據。
+//  ------------------------------------------------------------
+//  【怎麼用】
+//   1. Pine 編輯器貼上整份 → 儲存 → 加到圖表
+//   2. 下方「策略測試器」分頁看淨利/勝率/獲利因子/最大回撤
+//   3. SOXL 用日內：圖表切 5m/15m + 開「盤中收盤平倉」(美股 RTH)
+//      加密貨幣：把「盤中收盤平倉」關掉(24h)
+//  ------------------------------------------------------------
+//  【誠實標註 — 別被漂亮曲線騙(對應 LESSONS §2.8.2 / §2.8.4)】
+//   * 已設 process_orders_on_close=false → 市價單隔根開盤成交(無前視)
+//   * pivot 在 pivotLen 根後才確認 → BOS 偵測不前視
+//   * 已內建手續費 0.05% + 滑價 2 ticks，仍偏樂觀；SOXL 3x 實際更滑
+//   * Strategy Tester「只給一段區間」: 一定要自己換 3 段以上日期比對,
+//     30 天好看不算數,看逐年是否一致(這支 Pine 不會幫你做交叉樣本)
+//   * 低階方案分鐘 K 歷史不足以跑到 90-180 天 → 真正生死用 Python 框架
+// ============================================================
+//@version=6
+strategy("SOXL 順勢日內回測 (long-only)", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=20,
+     commission_type=strategy.commission.percent, commission_value=0.05,
+     slippage=2, process_orders_on_close=false,
+     max_lines_count=500, max_labels_count=500)
+
+// ---------- 參數 ----------
+emaLen   = input.int(20, "趨勢 EMA", minval=2)
+swingLk  = input.int(5,  "結構停損回看", minval=2)
+dipWin   = input.int(3,  "回踩後幾根內進場", minval=1)
+rr       = input.float(2.0, "停利 R:R", minval=0.5, step=0.5)
+
+intraday = input.bool(true, "盤中收盤平倉(美股 SOXL=開, 加密=關)", group="日內")
+sess     = input.session("0930-1600", "交易時段(當地)", group="日內")
+sessTz   = input.string("America/New_York", "時區", group="日內")
+
+// ---------- 趨勢 + 進場(順勢買回檔, 不追噴出) ----------
+ema     = ta.ema(close, emaLen)
+uptrend = close > ema and ema > ema[1]
+dip     = low <= ema                       // 回踩到 EMA
+inSess  = not na(time(timeframe.period, sess, sessTz))
+canTrade = not intraday or inSess
+
+// 條件:升勢中、近 dipWin 根內有回踩、今天收紅站回 EMA 且過前高
+trigBuy = uptrend and ta.barssince(dip) <= dipWin and close > ema and close > high[1]
+
+stopLv = ta.lowest(low, swingLk)
+
+if trigBuy and strategy.position_size == 0 and canTrade and stopLv < close
+    risk = close - stopLv
+    strategy.entry("L", strategy.long)
+    strategy.exit("X", "L", stop=stopLv, limit=close + risk * rr)
+
+// 日內:時段結束強制平倉(不過夜, SOXL 3x 過夜跳空致命)
+if intraday and not inSess and strategy.position_size != 0
+    strategy.close_all(comment="EOD")

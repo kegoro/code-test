@@ -38,7 +38,39 @@ BIAS_SHORT = 6     # 短期乖離率
 BIAS_LONG  = 24    # 長期乖離率平均線視窗
 
 
+def _is_us(code: str) -> bool:
+    """含英文字母 = 美股 ticker(台股代號純數字)。"""
+    return any(ch.isalpha() for ch in code)
+
+
+def _fetch_us_daily(code: str, days: int) -> list[dict]:
+    """yfinance 日K → 映射成 FinMind 同 schema(date/open/max/min/close/Trading_Volume)。"""
+    try:
+        import yfinance as yf
+        start = (date.today() - timedelta(days=days + 10)).isoformat()
+        df = yf.Ticker(code).history(start=start)  # 預設 auto_adjust=True
+        if df is None or df.empty:
+            return []
+        rows: list[dict] = []
+        for ts, r in df.iterrows():
+            close = float(r["Close"])
+            if close != close:  # NaN(當日盤中未完成 bar 的佔位列)→ 丟掉
+                continue
+            rows.append({
+                "date": ts.date().isoformat(),
+                "open": float(r["Open"]), "max": float(r["High"]),
+                "min": float(r["Low"]), "close": close,
+                "Trading_Volume": float(r.get("Volume", 0) or 0),
+            })
+        return rows
+    except Exception as exc:
+        logger.warning("yfinance daily %s failed: %s", code, exc)
+        return []
+
+
 def _fetch_daily(code: str, days: int = 180) -> list[dict]:
+    if _is_us(code):
+        return _fetch_us_daily(code.upper(), days)
     start = (date.today() - timedelta(days=days)).isoformat()
     try:
         r = requests.get(

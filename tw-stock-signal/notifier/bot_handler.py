@@ -391,7 +391,7 @@ async def _run_analyze_from_db() -> list:
     from scheduler.daily_job import _analyze_one
     from scheduler.calendar import prev_trading_date
     from notifier.report import save_signals
-    from pipeline.store import read_prices
+    from pipeline.store import read_prices, read_market_index
     import asyncio
 
     trading_date = prev_trading_date().isoformat()
@@ -411,8 +411,9 @@ async def _run_analyze_from_db() -> list:
         return []
 
     logger.info(f"[bot] /today: analyzing {len(have_data)} symbols from DB")
-    sem     = asyncio.Semaphore(8)
-    tasks   = [_analyze_one(stock, sem) for stock in have_data]
+    sem        = asyncio.Semaphore(8)
+    market_idx = read_market_index(days=10)
+    tasks      = [_analyze_one(stock, sem, market_idx) for stock in have_data]
     signals = []
     for coro in asyncio.as_completed(tasks):
         try:

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMC TV Chart</title>
+<style>
+  :root {
+    --bg: #070a0f;
+    --panel: #0d1320;
+    --line: #1a2235;
+    --text: #e6edf6;
+    --muted: #7c8aa6;
+    --accent: #4cc9f0;
+    --warn: #ffb454;
+    --bad: #ef476f;
+    --good: #06d6a0;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    background: rgba(13,19,32,0.8); backdrop-filter: blur(6px);
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: 2px; }
+  header .pill {
+    font-size: 11px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--accent); color: var(--accent);
+  }
+  header select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    padding: 6px 10px; border-radius: 6px; font-family: inherit; font-size: 13px;
+  }
+  header .status { margin-left: auto; font-size: 11px; color: var(--muted); }
+  header .status.warn { color: var(--warn); }
+  header .status.bad  { color: var(--bad); }
+
+  #tv_chart { width: 100%; height: calc(100vh - 56px); }
+
+  .placeholder {
+    width: 100%; height: calc(100vh - 56px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 48px; box-sizing: border-box;
+  }
+  .placeholder .card {
+    max-width: 720px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 12px; padding: 32px;
+  }
+  .placeholder h2 {
+    color: var(--warn); font-size: 18px; margin: 0 0 16px; letter-spacing: 1px;
+  }
+  .placeholder ol { line-height: 1.9; color: var(--text); padding-left: 20px; }
+  .placeholder code {
+    background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 4px;
+    font-size: 12px; color: var(--accent);
+  }
+  .placeholder a { color: var(--accent); }
+  .placeholder .note {
+    margin-top: 20px; padding: 12px 14px; border-radius: 8px;
+    background: rgba(76,201,240,0.06); border: 1px solid rgba(76,201,240,0.3);
+    font-size: 12px; color: var(--muted);
+  }
+  .placeholder .check { color: var(--good); }
+  .placeholder .x    { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>SMC&nbsp;TV&nbsp;CHART</h1>
+  <span class="pill">Phase&nbsp;C.1</span>
+  <select id="symbolSelect">
+    <option value="2330" selected>2330 TSMC</option>
+    <option value="2317">2317 Hon Hai</option>
+    <option value="2382">2382 Quanta</option>
+    <option value="2454">2454 MediaTek</option>
+    <option value="2308">2308 Delta</option>
+  </select>
+  <select id="resolutionSelect">
+    <option value="1" selected>1m</option>
+    <option value="3">3m</option>
+    <option value="1D">1D</option>
+  </select>
+  <span id="status" class="status">checking…</span>
+</header>
+
+<div id="tv_chart"></div>
+<div id="placeholder" class="placeholder" style="display:none;">
+  <div class="card">
+    <h2>⏳ 等 TradingView Charting Library</h2>
+    <p>UDF 後端（這個 server）已經就緒，但前端缺 TV 圖表引擎。</p>
+
+    <p><strong>等申請通過後（用 <code>h810378@smsh.ntpc.edu.tw</code>）：</strong></p>
+    <ol>
+      <li>到 TV 寄給你的私有 GitHub repo</li>
+      <li>把 <code>charting_library/</code> 資料夾整個複製到：<br>
+        <code>tv_chart/frontend/static/charting_library/</code></li>
+      <li>確認裡面有 <code>charting_library.standalone.js</code></li>
+      <li>重整這個頁面 → 應該就會看到 K 線圖了</li>
+    </ol>
+
+    <p><strong>後端狀態</strong></p>
+    <div id="healthDetails" style="font-size:13px; line-height:1.8;"></div>
+
+    <div class="note">
+      C.1 階段：跑 TV 內建指標（200+ 個）<br>
+      C.2 階段：再港 LuxAlgo SMC 進 Custom Studies
+    </div>
+  </div>
+</div>
+
+<script src="/static/datafeed.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const $ = (sel) => document.querySelector(sel);
+  const symbolEl = $('#symbolSelect');
+  const resEl    = $('#resolutionSelect');
+  const statusEl = $('#status');
+
+  let widget = null;
+
+  function setStatus(text, level) {
+    statusEl.textContent = text;
+    statusEl.className = 'status' + (level ? ' ' + level : '');
+  }
+
+  function renderHealthRow(label, ok, extra) {
+    const mark = ok ? '<span class="check">●</span>' : '<span class="x">●</span>';
+    const tail = extra ? ' — ' + extra : '';
+    return '<div>' + mark + ' ' + label + tail + '</div>';
+  }
+
+  function showPlaceholder(health) {
+    $('#tv_chart').style.display = 'none';
+    $('#placeholder').style.display = 'flex';
+    const lines = [
+      renderHealthRow('UDF datafeed', true, '/datafeed/* 已上線'),
+      renderHealthRow('Shioaji credentials',
+        !!(health && health.shioaji_credentials),
+        (health && health.shioaji_credentials) ? '.env.local OK' : '檢查 .env.local'),
+      renderHealthRow('TV Charting Library', false, '尚未放進 frontend/static/'),
+      renderHealthRow('Watchlist', true,
+        (health && (health.watchlist || []).join(', ')) || '2330,2317,2382'),
+    ];
+    $('#healthDetails').innerHTML = lines.join('');
+  }
+
+  function bootTradingView() {
+    const tv = window.TradingView;
+    if (!tv) return false;
+
+    const datafeed = new window.SMCDatafeed();
+    widget = new tv.widget({
+      container: 'tv_chart',
+      datafeed: datafeed,
+      symbol: symbolEl.value,
+      interval: resEl.value,
+      library_path: '/charting_library/',
+      locale: 'zh_TW',
+      theme: 'Dark',
+      autosize: true,
+      timezone: 'Asia/Taipei',
+      enabled_features: ['hide_left_toolbar_by_default'],
+      disabled_features: [
+        'use_localstorage_for_settings',
+        'header_symbol_search',
+        'header_compare',
+      ],
+      overrides: {
+        'paneProperties.background': '#070a0f',
+        'paneProperties.backgroundType': 'solid',
+        'paneProperties.vertGridProperties.color': '#1a2235',
+        'paneProperties.horzGridProperties.color': '#1a2235',
+        'scalesProperties.textColor': '#7c8aa6',
+        'mainSeriesProperties.candleStyle.upColor':     '#06d6a0',
+        'mainSeriesProperties.candleStyle.downColor':   '#ef476f',
+        'mainSeriesProperties.candleStyle.borderUpColor':  '#06d6a0',
+        'mainSeriesProperties.candleStyle.borderDownColor':'#ef476f',
+        'mainSeriesProperties.candleStyle.wickUpColor':    '#06d6a0',
+        'mainSeriesProperties.candleStyle.wickDownColor':  '#ef476f',
+      },
+    });
+    return true;
+  }
+
+  symbolEl.addEventListener('change', () => {
+    if (widget) {
+      widget.activeChart().setSymbol(symbolEl.value);
+    }
+  });
+  resEl.addEventListener('change', () => {
+    if (widget) {
+      widget.activeChart().setResolution(resEl.value);
+    }
+  });
+
+  // Probe /healthz to decide whether to boot TV or show the placeholder.
+  fetch('/healthz').then(r => r.json()).then(health => {
+    if (!health.library_present) {
+      setStatus('library missing', 'warn');
+      showPlaceholder(health);
+      return;
+    }
+    setStatus('library detected ✓', '');
+    // Load TV library asynchronously.
+    const s = document.createElement('script');
+    s.src = '/charting_library/charting_library.standalone.js';
+    s.onload = () => {
+      if (!bootTradingView()) {
+        setStatus('boot failed', 'bad');
+      } else {
+        setStatus('chart ready', '');
+      }
+    };
+    s.onerror = () => {
+      setStatus('library load failed', 'bad');
+      showPlaceholder(health);
+    };
+    document.head.appendChild(s);
+  }).catch(err => {
+    setStatus('healthz failed: ' + err.message, 'bad');
+    showPlaceholder(null);
+  });
+}());
+</script>
+</body>
+</html>

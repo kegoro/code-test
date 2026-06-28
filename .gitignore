@@ -40,3 +40,34 @@ reports/aistockmap_test.html
 # 缺貨雷達快取（衍生檔，可由 --all 重建）
 data/shortage_cache.json
 data/shortage_cache.tmp
+
+# 大型二進位 / 媒體（GitHub 100MB 限制）
+LESSONS-podcast.mp3
+*.mp3
+*.mp4
+
+# 執行期資料庫（不追蹤個人持倉 / 交易紀錄）
+data/sim_trade.duckdb
+data/sim_book.json
+data/paper_log.csv
+data/news_radar_seen.json
+data/blade1_state.json
+data/blade1_watchlist.json
+data/diamond_picks.json
+
+# 自動產生的每日掃描結果（可重跑）
+data/backtest_result.csv
+data/bt_*.csv
+data/txf_1min.csv
+data/layer_a_daily.csv
+tw-stock-signal/data/result_*.csv
+tw-stock-signal/data/signals_*.json
+
+# 巢狀 git 倉庫（不以 submodule 方式追蹤）
+skills-repo/
+everything-claude-code/
+
+# debug / probe 暫存
+backend/_potential_debug.txt
+_crop/
+compass_artifact_*

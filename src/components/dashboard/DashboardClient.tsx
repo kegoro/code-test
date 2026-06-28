@@ -26,6 +26,16 @@ import { useCallback, useRef } from "react";
 import { useLiveTicks } from "@/hooks/useLiveTicks";
 import { FootprintChart } from "@/components/charts/FootprintChart";
 import { SetupScannerPanel } from "@/components/scanner/SetupScannerPanel";
+import { OrderPanel } from "@/components/sim/OrderPanel";
+import { PositionList } from "@/components/sim/PositionList";
+import { useSimStatus } from "@/components/sim/useSimStatus";
+import { useSmcStructure } from "@/components/chart/useSmcStructure";
+import { SmcIdeaCard } from "@/components/chart/SmcIdeaCard";
+import type { OrderPanelPreset, SmcTradeIdea } from "@/types/smc";
+import { useScannerAlerts, type ScannerSignal } from "@/hooks/useScannerAlerts";
+import { AlertBanner } from "@/components/alerts/AlertBanner";
+import { AlertCenter } from "@/components/alerts/AlertCenter";
+import { playAlertBeep, primeAlertSound } from "@/lib/alert-sound";
 
 type ChartView = "kline" | "footprint";
 
@@ -74,6 +84,80 @@ export function DashboardClient() {
 
   const ticker = useMemo(() => findTicker(selectedSymbol), [selectedSymbol]);
   const quote = live.quotes[selectedSymbol];
+  const sim = useSimStatus(10_000);
+  const smc = useSmcStructure(selectedSymbol, 30_000);
+  const [orderPreset, setOrderPreset] = useState<OrderPanelPreset | null>(null);
+
+  const presetKeyRef = useRef<number>(0);
+
+  const applyTradeIdea = useCallback((idea: SmcTradeIdea) => {
+    presetKeyRef.current += 1;
+    setOrderPreset({
+      direction: idea.direction,
+      entry: idea.entry,
+      stop: idea.stop,
+      target: idea.target,
+      note: idea.setup_name,
+      key: presetKeyRef.current,
+    });
+  }, []);
+
+  const applyZone = useCallback(
+    (zone: { kind: "demand" | "supply"; top: number; bottom: number }) => {
+      const last = quote?.last ?? smc.data?.ltf.last_close ?? null;
+      presetKeyRef.current += 1;
+      if (zone.kind === "demand") {
+        const entry = zone.top;
+        const stop = zone.bottom * 0.998;
+        const reward = last && last > entry ? Math.max(last - entry, (entry - stop) * 1.5) : (entry - stop) * 2;
+        setOrderPreset({
+          direction: "long",
+          entry,
+          stop,
+          target: entry + reward,
+          note: `Demand ${zone.bottom.toFixed(2)}–${zone.top.toFixed(2)}`,
+          key: presetKeyRef.current,
+        });
+      } else {
+        const entry = zone.bottom;
+        const stop = zone.top * 1.002;
+        const reward = last && last < entry ? Math.max(entry - last, (stop - entry) * 1.5) : (stop - entry) * 2;
+        setOrderPreset({
+          direction: "short",
+          entry,
+          stop,
+          target: entry - reward,
+          note: `Supply ${zone.bottom.toFixed(2)}–${zone.top.toFixed(2)}`,
+          key: presetKeyRef.current,
+        });
+      }
+    },
+    [quote?.last, smc.data?.ltf.last_close]
+  );
+
+  const applyScannerSignal = useCallback((signal: ScannerSignal) => {
+    setSelectedSymbol(signal.symbol);
+    presetKeyRef.current += 1;
+    setOrderPreset({
+      direction: signal.direction === "LONG" ? "long" : "short",
+      entry: signal.entry_price,
+      stop: signal.stop_price,
+      target: signal.target_price,
+      note: `${signal.setup} ${signal.grade}級 訊號`,
+      key: presetKeyRef.current,
+    });
+  }, []);
+
+  const [bannerSignal, setBannerSignal] = useState<ScannerSignal | null>(null);
+  const [bannerKey, setBannerKey] = useState<number>(0);
+
+  const alerts = useScannerAlerts({
+    onNewSignal: useCallback((sig: ScannerSignal) => {
+      playAlertBeep(sig.grade);
+      setBannerSignal(sig);
+      setBannerKey((k) => k + 1);
+    }, []),
+  });
 
   const aiAutoEval = useMemo<AutoEvalResult>(() => {
     if (ai.status !== "ready" || !ai.data) return {};
@@ -155,7 +239,16 @@ export function DashboardClient() {
   }, [captureSnapshot]);
 
   return (
-    <div className="h-full grid grid-cols-[260px_1fr_380px] gap-2 p-2 min-h-0">
+    <div
+      className="h-full grid grid-cols-[260px_1fr_380px] gap-2 p-2 min-h-0"
+      onPointerDownCapture={primeAlertSound}
+    >
+      <AlertBanner
+        signal={bannerSignal}
+        triggerKey={bannerKey}
+        onUse={applyScannerSignal}
+        onDismiss={() => setBannerSignal(null)}
+      />
       <WatchlistPanel
         tickers={WATCHLIST_SYMBOLS}
         quotes={live.quotes}
@@ -190,6 +283,14 @@ export function DashboardClient() {
           <div className="flex items-center gap-2">
             <AIStatus status={ai.status} newsCount={ai.data?.newsCount ?? null} model={ai.data?.model ?? null} errorMessage={ai.errorMessage} />
             <TelegramStatus event={event} />
+            <AlertCenter
+              alerts={alerts.alerts}
+              unreadCount={alerts.unreadCount}
+              connected={alerts.connected}
+              onUseSignal={applyScannerSignal}
+              onMarkAllRead={alerts.markAllRead}
+              onClear={alerts.clear}
+            />
           </div>
         </div>
         <div className="flex-1 min-h-0">
@@ -199,6 +300,9 @@ export function DashboardClient() {
               state={kline.state}
               candles={kline.candles}
               refetch={kline.refetch}
+              structure={smc.data}
+              onTradeIdeaClick={applyTradeIdea}
+              onZoneClick={applyZone}
             />
           ) : (
             <FootprintChart
@@ -220,6 +324,27 @@ export function DashboardClient() {
           symbol={selectedSymbol}
         />
         <RriGauge value={rriMock.value} />
+        <SmcIdeaCard
+          symbol={selectedSymbol}
+          structure={smc.data}
+          loading={smc.loading}
+          error={smc.error}
+          onUseIdea={applyTradeIdea}
+        />
+        <OrderPanel
+          symbol={selectedSymbol}
+          lastPrice={quote?.last ?? null}
+          limits={sim.data?.limits ?? null}
+          preset={orderPreset}
+          onSubmitted={() => void sim.refresh()}
+        />
+        <PositionList
+          active={sim.data?.active ?? []}
+          today={sim.data?.today ?? []}
+          quoteBySymbol={live.quotes}
+          onSelectSymbol={setSelectedSymbol}
+          onClosed={() => void sim.refresh()}
+        />
         <SetupScannerPanel onSymbolSelect={setSelectedSymbol} />
       </div>
 

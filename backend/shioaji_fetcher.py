@@ -12,6 +12,7 @@ import atexit
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -318,3 +319,86 @@ async def shioaji_fetch(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 def is_available() -> bool:
     """Return True if Shioaji credentials are configured."""
     return bool(_api_key() and _secret_key())
+
+
+# ── 全市場漲幅掃描（上市普通股）────────────────────────────────────────────────
+# 用 snapshots 批次抓即時報價，找出當日漲幅 >= 門檻的強勢股。只需 Data 權限
+# （不需交易權限）。供 smc_bot 12:30/13:00/13:30 cron 推播用。
+
+_SNAPSHOT_BATCH = 400  # shioaji snapshots 單次建議 <= 500，保守取 400
+
+
+@dataclass(frozen=True)
+class Gainer:
+    code: str
+    name: str
+    change_rate: float   # 當日漲幅 %（相對昨收）
+    close: float         # 最新成交價
+    volume: int          # 當日累計成交量（張）
+
+
+@dataclass(frozen=True)
+class GainerScan:
+    gainers: tuple[Gainer, ...]   # 已依漲幅由高到低排序
+    total_scanned: int            # 實際送出查詢並有回應的標的數
+    market_active: bool           # 是否有任何標的今日有成交量（過濾假日/休市）
+
+
+def _tse_common_contracts(api) -> list:
+    """列出上市(TSE)普通股合約：4 碼純數字、首碼非 0（排除 ETF/權證/特別股）。"""
+    out = []
+    for c in api.Contracts.Stocks.TSE:
+        code = getattr(c, "code", "") or ""
+        if len(code) == 4 and code.isdigit() and code[0] != "0":
+            out.append(c)
+    return out
+
+
+def _sync_scan_gainers(min_change_pct: float) -> GainerScan:
+    api = _get_api()
+    contracts = _tse_common_contracts(api)
+    by_code = {c.code: c for c in contracts}
+
+    gainers: list[Gainer] = []
+    market_active = False
+    scanned = 0
+    for i in range(0, len(contracts), _SNAPSHOT_BATCH):
+        batch = contracts[i : i + _SNAPSHOT_BATCH]
+        try:
+            snaps = api.snapshots(batch)
+        except Exception as exc:
+            logger.warning("snapshots batch %d failed: %s", i // _SNAPSHOT_BATCH, exc)
+            continue
+        for s in snaps or []:
+            scanned += 1
+            vol = int(getattr(s, "total_volume", 0) or 0)
+            if vol > 0:
+                market_active = True
+            rate = float(getattr(s, "change_rate", 0.0) or 0.0)
+            if rate >= min_change_pct and vol > 0:
+                code = str(getattr(s, "code", ""))
+                contract = by_code.get(code)
+                name = (getattr(contract, "name", "") if contract else "") or code
+                gainers.append(
+                    Gainer(
+                        code=code,
+                        name=name,
+                        change_rate=rate,
+                        close=float(getattr(s, "close", 0.0) or 0.0),
+                        volume=vol,
+                    )
+                )
+    gainers.sort(key=lambda g: g.change_rate, reverse=True)
+    return GainerScan(
+        gainers=tuple(gainers),
+        total_scanned=scanned,
+        market_active=market_active,
+    )
+
+
+async def shioaji_scan_gainers(min_change_pct: float = 5.0) -> GainerScan:
+    """掃上市普通股，回傳當日漲幅 >= min_change_pct 的標的（漲幅高→低）。
+
+    snapshots 是同步 blocking call，放到 thread 執行不阻塞 event loop。
+    """
+    return await asyncio.to_thread(_sync_scan_gainers, min_change_pct)

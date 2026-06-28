@@ -1,3 +1,4 @@
+
 SMC Analyst — Backtest Report
   symbol            : SOL_USDT_15m_90d
   total bars        : 8641

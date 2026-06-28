@@ -1,0 +1,134 @@
+// ============================================================
+//  SMC 當沖輔助指標 — BOS / FVG / London 高低 / 流動性(PDH-PDL)
+//  為「雷老闆 SMC 系統」客製 (Claude Code)
+//  ------------------------------------------------------------
+//  【怎麼用】(不用懂程式)
+//   1. TradingView 圖表 → 下方/上方「Pine 編輯器 (Pine Editor)」
+//   2. 全選刪掉預設內容 → 貼上這整份 → 按「儲存 (Save)」
+//   3. 按「加到圖表 (Add to chart)」→ 自動畫，隨 K 線即時更新
+//   4. 圖上指標名稱旁「設定 (gear)」可開關各功能、改顏色、調時段
+//  ------------------------------------------------------------
+//  【適用市場 — 重要】
+//   OK 加密貨幣 / 外匯 (24h)：London 高低、流動性獵取整套有效
+//   NO 台股當沖 (09:00-13:30)：倫敦盤台北 15:00 才開、你已收盤，
+//      London 線對台股「當日」無意義(只能當隔日跳空背景)。
+//      台股當沖請用已驗證的 N-Pattern + /cdp 四線。
+//  ------------------------------------------------------------
+//  【POC / Volume Profile (VAL/VAH)】
+//   本指標「不」畫 POC。真實成交量分布請另加 TradingView 內建
+//   「Session/Fixed Range Volume Profile」(部分需付費方案)，把
+//   POC/VAL/VAH 當停利目標與 confluence，跟本指標疊著看。
+// ============================================================
+//@version=6
+indicator("SMC 當沖輔助 (BOS/FVG/London/流動性)", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ---------- 結構 / BOS ----------
+gS       = "結構 / BOS"
+pivotLen = input.int(5, "Swing 樞紐長度", minval=1, group=gS)
+showBOS  = input.bool(true, "顯示 BOS", group=gS)
+bosUpCol = input.color(color.green, "多方 BOS", group=gS)
+bosDnCol = input.color(color.red,   "空方 BOS", group=gS)
+
+// ---------- FVG ----------
+gF        = "FVG 失衡缺口"
+showFVG   = input.bool(true, "顯示 FVG", group=gF)
+fvgExtend = input.int(15, "FVG 框向右延伸 K 數", minval=0, group=gF)
+bullFvg   = input.color(color.new(color.teal, 80), "多方 FVG", group=gF)
+bearFvg   = input.color(color.new(color.red, 80),  "空方 FVG", group=gF)
+
+// ---------- London 時段 (加密/外匯適用) ----------
+gL      = "London 時段"
+showLon = input.bool(true, "顯示 London 高/低", group=gL)
+lonSess = input.session("0800-1600", "London 交易時段(當地)", group=gL)
+lonTz   = input.string("Europe/London", "時區", group=gL)
+lonCol  = input.color(color.orange, "London 線色", group=gL)
+
+// ---------- 流動性 (前日高低) ----------
+gP     = "流動性 (前日高低)"
+showPD = input.bool(true, "顯示前日高/低 PDH/PDL", group=gP)
+pdCol  = input.color(color.gray, "PDH/PDL 線色", group=gP)
+
+// ================= 結構 + BOS =================
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low,  pivotLen, pivotLen)
+
+var float lastPH = na
+var int   barPH  = na
+var float lastPL = na
+var int   barPL  = na
+var bool  doneUp = false
+var bool  doneDn = false
+
+if not na(ph)
+    lastPH := ph
+    barPH  := bar_index - pivotLen
+    doneUp := false
+if not na(pl)
+    lastPL := pl
+    barPL  := bar_index - pivotLen
+    doneDn := false
+
+// 多方 BOS：收盤突破前一個 swing 高
+if showBOS and not na(lastPH) and close > lastPH and not doneUp
+    line.new(barPH, lastPH, bar_index, lastPH, color=bosUpCol, width=2)
+    label.new(bar_index, lastPH, "BOS↑", style=label.style_label_down, color=bosUpCol, textcolor=color.white, size=size.small)
+    doneUp := true
+
+// 空方 BOS：收盤跌破前一個 swing 低
+if showBOS and not na(lastPL) and close < lastPL and not doneDn
+    line.new(barPL, lastPL, bar_index, lastPL, color=bosDnCol, width=2)
+    label.new(bar_index, lastPL, "BOS↓", style=label.style_label_up, color=bosDnCol, textcolor=color.white, size=size.small)
+    doneDn := true
+
+// ================= FVG =================
+// 多方 FVG：第 0 根的低 > 第 2 根的高 (中間留下向上失衡)
+if showFVG and low > high[2]
+    box.new(bar_index[2], low, bar_index + fvgExtend, high[2], border_width=0, bgcolor=bullFvg)
+// 空方 FVG：第 0 根的高 < 第 2 根的低
+if showFVG and high < low[2]
+    box.new(bar_index[2], low[2], bar_index + fvgExtend, high, border_width=0, bgcolor=bearFvg)
+
+// ================= London 高低 =================
+inLon  = not na(time(timeframe.period, lonSess, lonTz))
+newLon = inLon and not inLon[1]
+endLon = not inLon and inLon[1]
+
+var float lonHi = na
+var float lonLo = na
+var line  lnHi  = na
+var line  lnLo  = na
+var label lbHi  = na
+var label lbLo  = na
+
+if newLon
+    lonHi := high
+    lonLo := low
+else if inLon
+    lonHi := math.max(lonHi, high)
+    lonLo := math.min(lonLo, low)
+
+// 倫敦時段結束 → 畫出當日 London 高/低 (向右延伸)；只保留最近一日
+if showLon and endLon
+    if not na(lnHi)
+        line.delete(lnHi)
+        line.delete(lnLo)
+        label.delete(lbHi)
+        label.delete(lbLo)
+    lnHi := line.new(bar_index, lonHi, bar_index + 1, lonHi, color=lonCol, width=2, extend=extend.right)
+    lnLo := line.new(bar_index, lonLo, bar_index + 1, lonLo, color=lonCol, width=2, extend=extend.right)
+    lbHi := label.new(bar_index, lonHi, "London H", style=label.style_label_left, color=lonCol, textcolor=color.white, size=size.small)
+    lbLo := label.new(bar_index, lonLo, "London L", style=label.style_label_left, color=lonCol, textcolor=color.white, size=size.small)
+
+// London 流動性獵取：時段後掃過高/低又收回 = 進場觸發
+sweepHi = showLon and not inLon and not na(lonHi) and high > lonHi and close < lonHi
+sweepLo = showLon and not inLon and not na(lonLo) and low  < lonLo and close > lonLo
+plotshape(sweepHi, "London H 被掃", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
+plotshape(sweepLo, "London L 被掃", shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+alertcondition(sweepHi, "London High 被掃", "掃過 London High 後收回 → 偏空，等 BOS↓ + 回踩 FVG 做空")
+alertcondition(sweepLo, "London Low 被掃",  "掃過 London Low 後收回 → 偏多，等 BOS↑ + 回踩 FVG 做多")
+
+// ================= 流動性：前日高低 (PDH/PDL) =================
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+plot(showPD ? pdh : na, "PDH", color=pdCol, style=plot.style_linebr, linewidth=1)
+plot(showPD ? pdl : na, "PDL", color=pdCol, style=plot.style_linebr, linewidth=1)

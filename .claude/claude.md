@@ -1,6 +1,9 @@
 ## 對話啟動規則（最優先）
-- **每次新對話開始前**，先 Read 專案根目錄的 `LESSONS.md` 與 `雷老闆心法.md`
-- 該檔案包含跨對話的策略決策、踩坑紀錄、待驗證事項；`雷老闆心法.md` 是型態/進出場/財務指標的判斷依據
+- **每次新對話開始前**，先 Read 專案根目錄的 `LESSONS.md` 與 `雷老闆第二大腦/00-索引.md`
+- `LESSONS.md` 含跨對話的策略決策、踩坑紀錄、待驗證事項
+- `雷老闆第二大腦/` 是 Obsidian vault（型態/財務指標/選股法/案例/紀律 互連卡片），是型態/進出場/財務指標的判斷依據。從 `00-索引.md` 進入，需要哪個概念再 Read 對應卡片（如 `財務指標/合約負債.md`）
+  - 舊單檔 `雷老闆心法.md` 已重構進此 vault，保留作備份，**以第二大腦為準**
+- 雷老闆心法有更新（新書頁/新案例）時，更新對應卡片並在 `00-索引.md` 補連結
 - 完成回測 / 改策略 / 發現新坑後，**主動**詢問是否要更新 `LESSONS.md`
 
 ### 「繼續 XXX」恢復規則（重要）
@@ -9,6 +12,12 @@
   - 「繼續 sim-trade / 模擬交易」→ 先 Read `PROGRESS.md`
   - 其他「繼續」→ 先 Read 根目錄所有 `PROGRESS*.md` 找對應主題
 - 這些 PROGRESS 檔已記錄完整進度/決策/下一步，**讀完直接接手**。使用者不寫程式，無法自己補上下文，所以「先讀檔」優先於「問使用者」。
+
+## Telegram bot 維護規則（重要）
+- **新增 / 修改 / 刪除 Telegram 指令（CommandHandler / MessageHandler）或排程後，自動重啟對應 bot 並驗證 polling，不用先問使用者。** 改了 code 不重啟＝使用者收不到新功能（如 `/fin` 加好但 bot 沒重啟就等於沒有）。
+- 哪支 bot 看 LESSONS §1.5 判斷：`/fin`、鑽豹報告、N字/缺貨、txf、模擬倉 → **backend/smc_bot**；台股盤後 daily 訊號 → **tw-stock-signal daemon**。
+- **正確重啟方式（2026-06-15 修好並實測）**：先停舊 smc_bot 程序 → 跑 / 雙擊 `launch_smc_bot.vbs`（→ watchdog `start_smc_bot.bat` → python，內建 crash 自動重啟 + 開機自啟）→ 等 ~20 秒確認 `_smc_bot.watchdog.log` 出現 `Application started`。⚠️ **啟動檔（.bat / .vbs）永遠只能 ASCII、不可放中文** —— 中文 + Windows Big5 編碼會讓 cmd 解析中斷、bot 起不來且無錯誤畫面（這是過去「一直起不來」的真因，詳見根目錄 `反覆踩坑.md` 第 1 條）。
+- 重啟後跟使用者回報：哪支 bot、PID、註冊幾個指令。
 
 ## 回覆規則
 - 只輸出需要修改的程式碼片段
