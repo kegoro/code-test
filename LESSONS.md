@@ -136,6 +136,16 @@ C:\Users\sfudally\AppData\Local\Programs\Python\Python313\python.exe -m backend.
 ❌ **Shioaji kbars 單次上限 30 天（2026-06-27 踩到，根因）**：原本想用 Shioaji 抓日線（複用 bot 連線免 451），但 `api.kbars(start, end)` 的 date range **單次最多 30 天**，超過直接回 `HTTP 400 'Kbars date range must not exceed 30 days.'`。`_sync_fetch_daily` 一次要 `lookback*2+30=270` 天 → **每檔 400、150 檔全被 `except: continue` 靜默吞掉 → 永遠 0 檔**，降門檻也沒用。**diagnosis 教訓**：別猜，埋診斷（score_hist 全 0 + 抓 traceback）一次就看到真因；`except: continue` 吞錯是隱形殺手，掃描器務必把前幾個例外寫出來。**Shioaji 適合「即時快照/分鐘 K」，不適合「一次抓幾百天日線」** → 日線級全市場掃描改用 FinMind/交易所 OpenAPI。連帶好處：FinMind 是收盤級資料、天生無「盤中半根 K」問題（不需 `_trim_forming`）。
 通則：①即時資料源（Shioaji）做日線型態/量能篩選前，先確認資料窗夠不夠、最後一根是否已收完；②長窗歷史日線優先用 FinMind/OpenAPI。
 
+### 1.9 逐字稿版 6 模塊 `/six`（台股）`/seven`（美股）（2026-06-28）
+6 模塊＝**趨勢交易版**(②雙均線 50/200 多頭為地基)，與 §1.8 的「量價剛發動版」並存做新舊對照，不互相取代。共用評分核心 `potential_scan._new_score_df` + 對照渲染 `render_six_compare`。
+- **6 模塊**：①量價配合(價漲+量增) ②站上 MA50&MA200 且雙線上彎 ③突破布林上軌(中+2σ) ④貼 38.2/61.8% 關鍵位(±3%) ⑤RSI 站上 50 回測企穩再上彎 ⑥MACD 柱縮短→金叉。
+- `/six`：無參數＝台股全市場掃描(FinMind)；`/six 2330`＝單檔新舊對照；`/six 2`＝改門檻。
+- `/seven`：美股版。**全市場架構**＝NASDAQ 官方 screener 一次抓全美股(NASDAQ+NYSE+AMEX，~5833 普通股)報價/市值 → 依市值取前 N 深掃(yfinance 日 K)。**美股沒有 FinMind 那種全市場日 K API**，逐檔抓上千檔慢又易斷，故先用市值濾流動性前段再深掃（同台股「掃全市場、深掃前段活躍股」邏輯）。
+
+❗ **NASDAQ screener 沒有成交量欄位**（cols 只有 symbol/name/lastsale/netchange/pctchange/marketCap/url）。故「成交額排序」的成交量只能從 yfinance 深掃時的 df 取（close×20 日均量估算），不能在母體層用成交額預篩 → 母體一律先用市值取前 N，達標股才能用估算成交額重排。
+
+📊 **市值排序 vs 成交額排序實測（深掃前 700、達標 121 檔）**：兩種排序選出的**是同一批達標股**，差別只在**同分組內次序**（主排序是分數，市值/成交額只是同分 tiebreak）。5 分組兩版全同；4 分組才見差異——成交額排序把**低流動性**的（BUD 成交額僅 188M、BTI 266M、KMI 343M）往後擠，換上交易更熱的（GH 471M、BDX 470M、NSC 364M）。**結論：美股預設用成交額排序**（市值排序永遠把巨型權值股頂前面不管今天有沒有量；成交額優先呈現「真的推得動」的標的，與台股用成交額一致），看龍頭時 `/seven mcap` 切回。`US_TOP_N=700`（原 400，下探更多中大型發動股）。
+
 ---
 
 ## 2. ⭐ 2026-05-16 — 雷老闆面談後的策略升級【最新、最重要】
