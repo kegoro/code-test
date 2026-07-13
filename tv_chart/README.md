@@ -78,6 +78,7 @@ tv_chart/
 | `GET /datafeed/symbols`         | Symbol info (TWSE, 0900-1330, TWD)     |
 | `GET /datafeed/history`         | OHLCV bars for `[from, to]`            |
 | `GET /datafeed/marks`           | SMC event annotations (BOS / CHoCH / OB / FVG / EQH/EQL / TL break) |
+| `GET /datafeed/cdp`             | CDP 逆勢四線 (AH/NH/CDP/NL/AL) as horizontal lines |
 | `GET /datafeed/timescale_marks` | Empty (reserved)                       |
 | `GET /healthz`                  | Library + credentials readiness        |
 

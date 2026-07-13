@@ -204,6 +204,30 @@ async def marks(
     return {k: [payload[k][i] for i in keep] for k in payload}
 
 
+@router.get("/cdp")
+async def cdp_levels(symbol: str = Query(..., description="symbol code, e.g. 2330 / AAPL")) -> dict:
+    """CDP 逆勢四線(AH/NH/CDP/NL/AL)給前端畫水平線用。
+
+    複用 backend.cdp 的取數 + 計算;取數失敗回 {"s":"error"}。
+    """
+    from backend.cdp import CDPDataError, fetch_levels, levels_payload
+
+    code = symbol.strip().split(":")[-1]
+    try:
+        lv, _open, _last = await fetch_levels(code)
+    except CDPDataError as exc:
+        return {"s": "error", "errmsg": str(exc), "symbol": code}
+    except Exception as exc:
+        logger.exception("/cdp failed for %s", code)
+        return {"s": "error", "errmsg": repr(exc), "symbol": code}
+    return {
+        "s": "ok",
+        "symbol": code,
+        "prev_date": lv.prev_date,
+        "levels": levels_payload(lv),
+    }
+
+
 @router.get("/timescale_marks")
 async def timescale_marks() -> list[dict]:
     """Optional long-form marks below the time axis. Empty for now."""

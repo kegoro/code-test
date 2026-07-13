@@ -1,5 +1,7 @@
 """CDP 四線計算 + 訊號規則的單元測試。"""
-from backend.cdp import compute_cdp, cdp_signal
+import pytest
+
+from backend.cdp import compute_cdp, cdp_signal, levels_payload
 
 
 def test_compute_cdp_levels():
@@ -54,3 +56,71 @@ def test_signal_intraday_near_nl_is_buy_point():
     # 開在區間內,現價貼近 NL(90)
     s = " ".join(cdp_signal(lv, open_p=100, last_p=90))
     assert "買進 / 回補" in s
+
+
+# ── 畫線 payload(圖表用) ───────────────────────────────────────────────────
+
+def test_levels_payload_shape_and_prices():
+    # 沿用 110/90/100 → AH120 NH110 CDP100 NL90 AL80
+    lv = compute_cdp(110, 90, 100)
+    payload = levels_payload(lv)
+    assert [p["key"] for p in payload] == ["AH", "NH", "CDP", "NL", "AL"]
+    by_key = {p["key"]: p for p in payload}
+    assert by_key["AH"]["price"] == 120
+    assert by_key["NH"]["price"] == 110
+    assert by_key["CDP"]["price"] == 100
+    assert by_key["NL"]["price"] == 90
+    assert by_key["AL"]["price"] == 80
+    # 每條線都要有 label + color
+    for p in payload:
+        assert p["label"] and p["color"].startswith("#")
+    # 突破/轉弱同紅、轉強/跌破同綠(對齊前端色票)
+    assert by_key["AH"]["color"] == by_key["NL"]["color"]
+    assert by_key["NH"]["color"] == by_key["AL"]["color"]
+    assert by_key["CDP"]["color"] != by_key["AH"]["color"]
+
+
+def test_cdp_endpoint_returns_ok_levels(monkeypatch):
+    """/datafeed/cdp 回傳結構化 JSON(mock 取數,避開 shioaji/yfinance)。"""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    import backend.cdp as cdp_mod
+
+    async def fake_fetch(symbol):
+        return compute_cdp(110, 90, 100, prev_date="2026-07-11"), None, None
+
+    monkeypatch.setattr(cdp_mod, "fetch_levels", fake_fetch)
+
+    from tv_chart.backend.main import app
+
+    client = TestClient(app)
+    resp = client.get("/datafeed/cdp", params={"symbol": "2330"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["s"] == "ok"
+    assert data["symbol"] == "2330"
+    assert data["prev_date"] == "2026-07-11"
+    assert [lv["key"] for lv in data["levels"]] == ["AH", "NH", "CDP", "NL", "AL"]
+
+
+def test_cdp_endpoint_reports_error(monkeypatch):
+    """取數失敗時回 s=error,不丟 500。"""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    import backend.cdp as cdp_mod
+
+    async def fake_fetch(symbol):
+        raise cdp_mod.CDPDataError("查無日線")
+
+    monkeypatch.setattr(cdp_mod, "fetch_levels", fake_fetch)
+
+    from tv_chart.backend.main import app
+
+    client = TestClient(app)
+    resp = client.get("/datafeed/cdp", params={"symbol": "9999"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["s"] == "error"
+    assert "查無日線" in data["errmsg"]

@@ -110,6 +110,23 @@ def cdp_signal(lv: CDPLevels, open_p: Optional[float],
     return out
 
 
+# 畫線用色票(對齊前端 index.html:--bad 紅 / --good 綠 / --muted 灰)
+_LINE_COLOR_BREAK = "#ef476f"   # AH / NL(突破、轉弱 → 紅)
+_LINE_COLOR_TREND = "#06d6a0"   # NH / AL(轉強、跌破 → 綠)
+_LINE_COLOR_MID = "#7c8aa6"     # CDP 中軸(灰)
+
+
+def levels_payload(lv: CDPLevels) -> list[dict]:
+    """把 CDPLevels 攤成畫線用的 [{key,label,price,color}, ...](由上而下)。"""
+    return [
+        {"key": "AH", "label": "突破 AH", "price": lv.ah, "color": _LINE_COLOR_BREAK},
+        {"key": "NH", "label": "轉強 NH", "price": lv.nh, "color": _LINE_COLOR_TREND},
+        {"key": "CDP", "label": "CDP", "price": lv.cdp, "color": _LINE_COLOR_MID},
+        {"key": "NL", "label": "轉弱 NL", "price": lv.nl, "color": _LINE_COLOR_BREAK},
+        {"key": "AL", "label": "跌破 AL", "price": lv.al, "color": _LINE_COLOR_TREND},
+    ]
+
+
 def _fmt(x: float) -> str:
     return f"{x:,.2f}"
 
@@ -139,20 +156,46 @@ def _format(symbol: str, lv: CDPLevels,
 
 # ── 取數(台股 shioaji / 美股 yfinance) ─────────────────────────────────────
 
+class CDPDataError(Exception):
+    """CDP 取數失敗(代號錯誤 / 查無日線)。"""
+
+
+async def fetch_levels(
+    symbol: str,
+) -> tuple[CDPLevels, Optional[float], Optional[float]]:
+    """取單一標的的 CDP 四線 + 今日開盤/現價(盤中才有)。
+
+    回傳 (CDPLevels, open_p, last_p)。取數失敗時 raise CDPDataError。
+    這是 analyze()(文字輸出)與圖表畫線端點共用的取數入口。
+    """
+    symbol = symbol.strip()
+    if is_us(symbol):
+        return await asyncio.to_thread(_levels_us, symbol.upper())
+    return await _levels_tw(symbol)
+
+
+async def get_levels(symbol: str) -> CDPLevels:
+    """只回 CDP 四線,供圖表畫線用(不需要開盤/現價)。失敗 raise CDPDataError。"""
+    lv, _, _ = await fetch_levels(symbol)
+    return lv
+
+
 async def analyze(symbol: str) -> str:
     """查單一標的 CDP,回傳可直接推 Telegram 的訊息。"""
     symbol = symbol.strip()
-    if is_us(symbol):
-        return await asyncio.to_thread(_analyze_us, symbol.upper())
-    return await _analyze_tw(symbol)
+    try:
+        lv, open_p, last_p = await fetch_levels(symbol)
+    except CDPDataError as exc:
+        return f"📐 {symbol}:CDP 取資料失敗({exc})。"
+    return _format(symbol, lv, open_p, last_p)
 
 
-def _analyze_us(symbol: str) -> str:
+def _levels_us(symbol: str) -> tuple[CDPLevels, Optional[float], Optional[float]]:
     from backend.diamond_blade3 import _fetch_us_daily
 
     rows = _fetch_us_daily(symbol, 15)
     if len(rows) < 2:
-        return f"📐 {symbol}:CDP 取資料失敗(代號錯誤或查無日線)。"
+        raise CDPDataError("代號錯誤或查無日線")
     today = datetime.now(_TZ_US).date().isoformat()
     if rows[-1]["date"] == today:
         prev, today_bar = rows[-2], rows[-1]
@@ -160,15 +203,15 @@ def _analyze_us(symbol: str) -> str:
     else:
         prev, open_p, last_p = rows[-1], None, None
     lv = compute_cdp(prev["max"], prev["min"], prev["close"], prev_date=prev["date"])
-    return _format(symbol, lv, open_p, last_p)
+    return lv, open_p, last_p
 
 
-async def _analyze_tw(symbol: str) -> str:
+async def _levels_tw(symbol: str) -> tuple[CDPLevels, Optional[float], Optional[float]]:
     from backend.shioaji_fetcher import shioaji_fetch_daily, shioaji_fetch_m1
 
     daily = await shioaji_fetch_daily(symbol, lookback=12)
     if daily is None or daily.empty or len(daily) < 1:
-        return f"📐 {symbol}:CDP 取資料失敗(查無日線)。"
+        raise CDPDataError("查無日線")
 
     today = datetime.now(_TZ_TW).date()
     prior = daily[daily.index.date < today]
@@ -192,7 +235,7 @@ async def _analyze_tw(symbol: str) -> str:
     except Exception as exc:
         logger.warning("cdp tw m1 %s: %s", symbol, exc)
 
-    return _format(symbol, lv, open_p, last_p)
+    return lv, open_p, last_p
 
 
 if __name__ == "__main__":

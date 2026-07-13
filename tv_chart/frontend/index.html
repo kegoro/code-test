@@ -83,6 +83,9 @@
     <option value="3">3m</option>
     <option value="1D">1D</option>
   </select>
+  <label style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; cursor:pointer;">
+    <input type="checkbox" id="cdpToggle" checked> CDP 四線
+  </label>
   <span id="status" class="status">checking…</span>
 </header>
 
@@ -119,9 +122,11 @@
   const $ = (sel) => document.querySelector(sel);
   const symbolEl = $('#symbolSelect');
   const resEl    = $('#resolutionSelect');
+  const cdpEl    = $('#cdpToggle');
   const statusEl = $('#status');
 
   let widget = null;
+  let cdpShapeIds = [];   // 已畫上的 CDP 水平線 entity id,重畫前逐一清除
 
   function setStatus(text, level) {
     statusEl.textContent = text;
@@ -147,6 +152,62 @@
         (health && (health.watchlist || []).join(', ')) || '2330,2317,2382'),
     ];
     $('#healthDetails').innerHTML = lines.join('');
+  }
+
+  // ── CDP 四線 ─────────────────────────────────────────────────────────────
+  function clearCdpLines() {
+    if (!widget) return;
+    const chart = widget.activeChart();
+    cdpShapeIds.forEach(id => {
+      try { chart.removeEntity(id); } catch (e) { /* 已不存在,略過 */ }
+    });
+    cdpShapeIds = [];
+  }
+
+  function drawCdpLines() {
+    if (!widget) return;
+    clearCdpLines();
+    if (!cdpEl.checked) return;
+
+    const sym = symbolEl.value;
+    fetch('/datafeed/cdp?symbol=' + encodeURIComponent(sym))
+      .then(r => r.json())
+      .then(data => {
+        // 使用者可能在 fetch 期間換了 symbol → 丟棄過期回應
+        if (!widget || sym !== symbolEl.value || !cdpEl.checked) return;
+        if (!data || data.s !== 'ok' || !Array.isArray(data.levels)) {
+          console.warn('CDP levels unavailable:', data && data.errmsg);
+          return;
+        }
+        const chart = widget.activeChart();
+        // horizontal_line 只吃 price;time 給個近當下的值即可(整條橫線)
+        const anchorTime = Math.floor(Date.now() / 1000);
+        data.levels.forEach(lv => {
+          try {
+            const id = chart.createShape(
+              { time: anchorTime, price: lv.price },
+              {
+                shape: 'horizontal_line',
+                lock: true,
+                disableSelection: true,
+                disableSave: true,
+                overrides: {
+                  linecolor: lv.color,
+                  linestyle: 2,          // 虛線
+                  linewidth: 1,
+                  showLabel: true,
+                  textcolor: lv.color,
+                  text: lv.label + '  ' + lv.price.toFixed(2),
+                  horzLabelsAlign: 'right',
+                },
+              });
+            if (id) cdpShapeIds.push(id);
+          } catch (e) {
+            console.warn('createShape failed for', lv.key, e);
+          }
+        });
+      })
+      .catch(err => console.warn('fetch CDP failed:', err));
   }
 
   function bootTradingView() {
@@ -184,19 +245,22 @@
         'mainSeriesProperties.candleStyle.wickDownColor':  '#ef476f',
       },
     });
+    widget.onChartReady(() => drawCdpLines());
     return true;
   }
 
   symbolEl.addEventListener('change', () => {
     if (widget) {
-      widget.activeChart().setSymbol(symbolEl.value);
+      // setSymbol 完成後才重畫,確保線落在新標的的圖上
+      widget.activeChart().setSymbol(symbolEl.value, () => drawCdpLines());
     }
   });
   resEl.addEventListener('change', () => {
     if (widget) {
-      widget.activeChart().setResolution(resEl.value);
+      widget.activeChart().setResolution(resEl.value, () => drawCdpLines());
     }
   });
+  cdpEl.addEventListener('change', drawCdpLines);
 
   // Probe /healthz to decide whether to boot TV or show the placeholder.
   fetch('/healthz').then(r => r.json()).then(health => {
